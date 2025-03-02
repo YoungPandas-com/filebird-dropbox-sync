@@ -1,0 +1,25 @@
+{
+    "name": "yp-studio/filebird-dropbox-sync",
+    "description": "Robust, two-way synchronization between FileBird folders and Dropbox",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "authors": [
+        {
+            "name": "YP Studio",
+            "email": "admin@yp.studio"
+        }
+    ],
+    "minimum-stability": "stable",
+    "require": {
+        "php": ">=7.4",
+        "spatie/dropbox-api": "^1.19"
+    },
+    "autoload": {
+        "psr-4": {
+            "FileBirdDropboxSync\\": "src/"
+        }
+    },
+    "suggest": {
+    "woocommerce/action-scheduler": "^3.4 - Recommended for optimal performance with large media libraries"
+    }
+}
