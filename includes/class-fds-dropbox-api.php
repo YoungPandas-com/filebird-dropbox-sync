@@ -6,7 +6,7 @@
  *
  * @since      1.0.0
  */
-class FDS_Dropbox_API_Enhanced extends FDS_Dropbox_API {
+class FDS_Dropbox_API {
 
     /**
      * API rate limiting parameters.

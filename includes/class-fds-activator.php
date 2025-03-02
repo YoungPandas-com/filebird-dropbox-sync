@@ -6,7 +6,7 @@
  *
  * @since      1.0.0
  */
-class FDS_Activator_Enhanced {
+class FDS_Activator {
 
     /**
      * Create optimized database tables and indexes.
