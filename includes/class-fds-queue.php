@@ -71,49 +71,83 @@ class FDS_Queue {
         
         // Get lock
         if (!$this->get_lock()) {
+            $this->logger->debug("Could not acquire queue lock, another process is running");
             return;
         }
         
-        // Get the DB instance
-        $db = new FDS_DB();
-        
-        // Get batch size
-        $batch_size = get_option('fds_queue_batch_size', 10);
-        
-        // Process pending items
-        $items = $db->get_pending_tasks($batch_size);
-        
-        if (empty($items)) {
-            $this->release_lock();
-            return;
-        }
-        
-        foreach ($items as $item) {
-            // Mark as processing
-            $db->update_task_status($item->id, 'processing');
+        try {
+            // Get the DB instance
+            $db = new FDS_DB();
             
-            // Process the item
-            $success = $this->process_item($item);
+            // Get batch size
+            $batch_size = get_option('fds_queue_batch_size', 10);
             
-            // Update status
-            if ($success) {
-                $db->update_task_status($item->id, 'completed');
-            } else {
-                // If max retries reached, mark as failed
-                $max_retries = get_option('fds_max_retries', 3);
-                if ($item->attempts >= $max_retries) {
-                    $db->update_task_status($item->id, 'failed', 'Max retry attempts reached');
-                } else {
-                    $db->update_task_status($item->id, 'pending', 'Will retry later');
+            // Process pending items
+            $items = $db->get_pending_tasks($batch_size);
+            
+            if (empty($items)) {
+                $this->logger->debug("No pending tasks to process");
+                return;
+            }
+            
+            $this->logger->info("Processing queue batch", [
+                'batch_size' => count($items)
+            ]);
+            
+            $success_count = 0;
+            $failure_count = 0;
+            
+            foreach ($items as $item) {
+                // Mark as processing
+                $db->update_task_status($item->id, 'processing');
+                
+                try {
+                    // Process the item
+                    $success = $this->process_item($item);
+                    
+                    // Update status
+                    if ($success) {
+                        $db->update_task_status($item->id, 'completed');
+                        $success_count++;
+                    } else {
+                        // If max retries reached, mark as failed
+                        $max_retries = get_option('fds_max_retries', 3);
+                        if ($item->attempts >= $max_retries) {
+                            $db->update_task_status($item->id, 'failed', 'Max retry attempts reached');
+                            $failure_count++;
+                        } else {
+                            $db->update_task_status($item->id, 'pending', 'Will retry later');
+                        }
+                    }
+                } catch (Exception $e) {
+                    $error_message = "Exception while processing item: " . $e->getMessage();
+                    $db->update_task_status($item->id, 'failed', $error_message);
+                    $this->logger->error($error_message, [
+                        'item_id' => $item->id,
+                        'exception' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    $failure_count++;
                 }
             }
+            
+            $this->logger->info("Queue batch processing completed", [
+                'success_count' => $success_count,
+                'failure_count' => $failure_count,
+                'total' => count($items)
+            ]);
+            
+            // Cleanup completed tasks older than 7 days
+            $db->cleanup_completed_tasks(7);
+        } catch (Exception $e) {
+            $this->logger->error("Fatal error in queue processing", [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+        } finally {
+            // ALWAYS release lock to prevent queue processing deadlock
+            $this->release_lock();
         }
-        
-        // Cleanup completed tasks older than 7 days
-        $db->cleanup_completed_tasks(7);
-        
-        // Release lock
-        $this->release_lock();
     }
 
     /**

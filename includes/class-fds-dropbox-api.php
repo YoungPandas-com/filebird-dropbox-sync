@@ -9,6 +9,20 @@
 class FDS_Dropbox_API {
 
     /**
+     * The settings instance.
+     *
+     * @var FDS_Settings
+     */
+    protected $settings;
+
+    /**
+     * The logger instance.
+     *
+     * @var FDS_Logger
+     */
+    protected $logger;
+
+    /**
      * API rate limiting parameters.
      */
     protected $rate_limit_remaining = 1000;
@@ -34,12 +48,530 @@ class FDS_Dropbox_API {
      * @param FDS_Settings $settings Settings instance.
      * @param FDS_Logger $logger Logger instance.
      */
-    public function __construct($settings, $logger) {
-        parent::__construct($settings);
-        $this->logger = $logger;
+    public function __construct($settings, $logger = null) {
+        $this->settings = $settings;
+        $this->logger = $logger ?: new FDS_Logger();
         $this->request_window_start = time();
     }
     
+    /**
+     * Upload a file to Dropbox.
+     *
+     * @param string $local_path Local file path.
+     * @param string $dropbox_path Dropbox destination path.
+     * @param bool $overwrite Whether to overwrite existing file.
+     * @return array|false File metadata or false on failure.
+     */
+    public function upload_file($local_path, $dropbox_path, $overwrite = true) {
+        // Check if file exists
+        if (!file_exists($local_path)) {
+            $this->logger->error("File not found for upload", [
+                'local_path' => $local_path,
+                'dropbox_path' => $dropbox_path
+            ]);
+            return false;
+        }
+        
+        // Check file size and decide on upload method
+        $file_size = filesize($local_path);
+        if ($file_size > 8388608) { // 8MB
+            return $this->upload_file_chunked($local_path, $dropbox_path);
+        }
+        
+        try {
+            // Prepare API request
+            $url = 'https://content.dropboxapi.com/2/files/upload';
+            
+            $args = [
+                'method' => 'POST',
+                'headers' => [
+                    'Authorization' => 'Bearer ' . get_option('fds_dropbox_access_token', ''),
+                    'Content-Type' => 'application/octet-stream',
+                    'Dropbox-API-Arg' => json_encode([
+                        'path' => $dropbox_path,
+                        'mode' => $overwrite ? 'overwrite' : 'add',
+                        'autorename' => false,
+                        'mute' => false
+                    ])
+                ],
+                'body' => file_get_contents($local_path),
+                'timeout' => 60,
+            ];
+            
+            // Track timing
+            $start_time = microtime(true);
+            
+            // Execute request with retry logic
+            $max_retries = 3;
+            $retry_count = 0;
+            
+            while ($retry_count < $max_retries) {
+                $response = wp_remote_request($url, $args);
+                $this->request_count++;
+                
+                if (!is_wp_error($response)) {
+                    $status_code = wp_remote_retrieve_response_code($response);
+                    $body = wp_remote_retrieve_body($response);
+                    
+                    if ($status_code === 200) {
+                        $result = json_decode($body, true);
+                        
+                        // Log success
+                        $elapsed = microtime(true) - $start_time;
+                        $this->logger->info("File uploaded successfully", [
+                            'dropbox_path' => $dropbox_path,
+                            'size' => $file_size,
+                            'elapsed_seconds' => round($elapsed, 2)
+                        ]);
+                        
+                        return $result;
+                    } elseif ($status_code === 429) {
+                        // Rate limited
+                        $retry_after = wp_remote_retrieve_header($response, 'retry-after');
+                        $retry_after = $retry_after ? intval($retry_after) : 10;
+                        
+                        $this->logger->warning("Rate limited during upload", [
+                            'retry_after' => $retry_after,
+                            'retry_count' => $retry_count
+                        ]);
+                        
+                        sleep($retry_after);
+                        $retry_count++;
+                        continue;
+                    } elseif ($status_code === 401) {
+                        // Unauthorized - try to refresh token
+                        $this->logger->warning("Unauthorized during upload, refreshing token", [
+                            'retry_count' => $retry_count
+                        ]);
+                        
+                        if ($this->refresh_access_token()) {
+                            $args['headers']['Authorization'] = 'Bearer ' . get_option('fds_dropbox_access_token', '');
+                            $retry_count++;
+                            continue;
+                        }
+                        
+                        throw new Exception("Unauthorized and token refresh failed");
+                    } else {
+                        // Other error
+                        throw new Exception("Upload failed with status {$status_code}: {$body}");
+                    }
+                } else {
+                    // Network error
+                    $this->logger->warning("Network error during upload", [
+                        'error' => $response->get_error_message(),
+                        'retry_count' => $retry_count
+                    ]);
+                    
+                    // Exponential backoff
+                    sleep(pow(2, $retry_count));
+                    $retry_count++;
+                    continue;
+                }
+            }
+            
+            throw new Exception("Upload failed after {$max_retries} retries");
+        } catch (Exception $e) {
+            $this->logger->error("File upload failed", [
+                'exception' => $e->getMessage(),
+                'local_path' => $local_path,
+                'dropbox_path' => $dropbox_path
+            ]);
+            
+            return false;
+        }
+    }
+    
+    /**
+     * Get file metadata from Dropbox.
+     *
+     * @param string $path Dropbox file path.
+     * @return array|false Metadata or false on failure.
+     */
+    public function get_file_metadata($path) {
+        try {
+            $params = ['path' => $path];
+            $result = $this->make_api_request('files/get_metadata', $params);
+            
+            if (is_wp_error($result)) {
+                throw new Exception($result->get_error_message());
+            }
+            
+            return $result;
+        } catch (Exception $e) {
+            $this->logger->error("Failed to get file metadata", [
+                'exception' => $e->getMessage(),
+                'path' => $path
+            ]);
+            
+            return false;
+        }
+    }
+    
+    /**
+     * Download a file from Dropbox.
+     *
+     * @param string $dropbox_path Dropbox file path.
+     * @param string $local_path Local destination path.
+     * @return bool True on success, false on failure.
+     */
+    public function download_file($dropbox_path, $local_path) {
+        return $this->download_file_enhanced($dropbox_path, $local_path);
+    }
+    
+    /**
+     * Delete a file from Dropbox.
+     *
+     * @param string $path Dropbox file path.
+     * @return bool True on success, false on failure.
+     */
+    public function delete_file($path) {
+        try {
+            $params = ['path' => $path];
+            $result = $this->make_api_request('files/delete_v2', $params);
+            
+            if (is_wp_error($result)) {
+                throw new Exception($result->get_error_message());
+            }
+            
+            $this->logger->info("File deleted from Dropbox", [
+                'path' => $path
+            ]);
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("Failed to delete file", [
+                'exception' => $e->getMessage(),
+                'path' => $path
+            ]);
+            
+            return false;
+        }
+    }
+    
+    /**
+     * Move or rename a file in Dropbox.
+     *
+     * @param string $from_path Source path.
+     * @param string $to_path Destination path.
+     * @return bool True on success, false on failure.
+     */
+    public function move_file($from_path, $to_path) {
+        try {
+            $params = [
+                'from_path' => $from_path,
+                'to_path' => $to_path,
+                'allow_shared_folder' => false,
+                'autorename' => false,
+                'allow_ownership_transfer' => false
+            ];
+            
+            $result = $this->make_api_request('files/move_v2', $params);
+            
+            if (is_wp_error($result)) {
+                throw new Exception($result->get_error_message());
+            }
+            
+            $this->logger->info("File moved in Dropbox", [
+                'from_path' => $from_path,
+                'to_path' => $to_path
+            ]);
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("Failed to move file", [
+                'exception' => $e->getMessage(),
+                'from_path' => $from_path,
+                'to_path' => $to_path
+            ]);
+            
+            return false;
+        }
+    }
+    
+    /**
+     * Create a folder in Dropbox.
+     *
+     * @param string $path Dropbox folder path.
+     * @return bool True on success, false on failure.
+     */
+    public function create_folder($path) {
+        try {
+            $params = [
+                'path' => $path,
+                'autorename' => false
+            ];
+            
+            $result = $this->make_api_request('files/create_folder_v2', $params);
+            
+            if (is_wp_error($result)) {
+                throw new Exception($result->get_error_message());
+            }
+            
+            $this->logger->info("Folder created in Dropbox", [
+                'path' => $path
+            ]);
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("Failed to create folder", [
+                'exception' => $e->getMessage(),
+                'path' => $path
+            ]);
+            
+            return false;
+        }
+    }
+    
+    /**
+     * Delete a folder from Dropbox.
+     *
+     * @param string $path Dropbox folder path.
+     * @return bool True on success, false on failure.
+     */
+    public function delete_folder($path) {
+        return $this->delete_file($path); // Uses the same API endpoint
+    }
+    
+    /**
+     * Move or rename a folder in Dropbox.
+     *
+     * @param string $from_path Source path.
+     * @param string $to_path Destination path.
+     * @return bool True on success, false on failure.
+     */
+    public function move_folder($from_path, $to_path) {
+        return $this->move_file($from_path, $to_path); // Uses the same API endpoint
+    }
+    
+    /**
+     * Get folder cursor for delta sync.
+     *
+     * @param string $path Dropbox folder path.
+     * @return string|false Cursor or false on failure.
+     */
+    public function get_folder_cursor($path = '') {
+        try {
+            $path = empty($path) ? get_option('fds_root_dropbox_folder', '/Website') : $path;
+            
+            $params = [
+                'path' => $path,
+                'recursive' => true,
+                'include_media_info' => true
+            ];
+            
+            $result = $this->make_api_request('files/list_folder/get_latest_cursor', $params);
+            
+            if (is_wp_error($result) || !isset($result['cursor'])) {
+                throw new Exception(is_wp_error($result) ? $result->get_error_message() : 'No cursor returned');
+            }
+            
+            return $result['cursor'];
+        } catch (Exception $e) {
+            $this->logger->error("Failed to get folder cursor", [
+                'exception' => $e->getMessage(),
+                'path' => $path
+            ]);
+            
+            return false;
+        }
+    }
+    
+    /**
+     * Get the latest cursor from storage.
+     *
+     * @return string|false Cursor or false if not found.
+     */
+    public function get_latest_cursor() {
+        return get_option('fds_dropbox_cursor', false);
+    }
+    
+    /**
+     * Get changes since the last sync.
+     *
+     * @param string $cursor Previous cursor.
+     * @return array|false Changes or false on failure.
+     */
+    public function get_changes($cursor) {
+        if (empty($cursor)) {
+            return false;
+        }
+        
+        try {
+            $result = $this->list_folder_continue($cursor);
+            
+            if (is_wp_error($result)) {
+                throw new Exception($result->get_error_message());
+            }
+            
+            return $result;
+        } catch (Exception $e) {
+            $this->logger->error("Failed to get changes", [
+                'exception' => $e->getMessage(),
+                'cursor' => $cursor
+            ]);
+            
+            return false;
+        }
+    }
+    
+    /**
+     * Refresh the access token using the refresh token.
+     *
+     * @return bool True if token was refreshed, false otherwise.
+     */
+    public function refresh_access_token() {
+        $refresh_token = get_option('fds_dropbox_refresh_token', '');
+        
+        if (empty($refresh_token)) {
+            return false;
+        }
+        
+        try {
+            $url = 'https://api.dropboxapi.com/oauth2/token';
+            $app_key = get_option('fds_dropbox_app_key', '');
+            $app_secret = get_option('fds_dropbox_app_secret', '');
+            
+            if (empty($app_key) || empty($app_secret)) {
+                throw new Exception("App key or secret not configured");
+            }
+            
+            $args = [
+                'method' => 'POST',
+                'headers' => [
+                    'Content-Type' => 'application/x-www-form-urlencoded'
+                ],
+                'body' => [
+                    'grant_type' => 'refresh_token',
+                    'refresh_token' => $refresh_token,
+                    'client_id' => $app_key,
+                    'client_secret' => $app_secret
+                ]
+            ];
+            
+            $response = wp_remote_request($url, $args);
+            
+            if (is_wp_error($response)) {
+                throw new Exception($response->get_error_message());
+            }
+            
+            $status_code = wp_remote_retrieve_response_code($response);
+            $body = wp_remote_retrieve_body($response);
+            $result = json_decode($body, true);
+            
+            if ($status_code !== 200 || !isset($result['access_token'])) {
+                throw new Exception("Failed to refresh token: " . ($result['error_description'] ?? $body));
+            }
+            
+            // Save the new token
+            update_option('fds_dropbox_access_token', $result['access_token']);
+            
+            // Update expiry time if provided
+            if (isset($result['expires_in'])) {
+                update_option('fds_dropbox_token_expiry', time() + $result['expires_in']);
+            }
+            
+            $this->logger->info("Dropbox access token refreshed successfully");
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("Failed to refresh access token", [
+                'exception' => $e->getMessage()
+            ]);
+            
+            return false;
+        }
+    }
+    
+    /**
+     * Check if there is a valid token.
+     *
+     * @return bool True if token is valid, false otherwise.
+     */
+    public function has_valid_token() {
+        $access_token = get_option('fds_dropbox_access_token', '');
+        $token_expiry = get_option('fds_dropbox_token_expiry', 0);
+        
+        if (empty($access_token)) {
+            return false;
+        }
+        
+        // If token has an expiry and it's expired, try to refresh
+        if ($token_expiry > 0 && $token_expiry <= time()) {
+            return $this->refresh_access_token();
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Register a webhook with Dropbox.
+     *
+     * @return bool True on success, false on failure.
+     */
+    public function register_webhook() {
+        try {
+            $webhook_url = get_rest_url(null, 'fds/v1/webhook');
+            
+            $params = [
+                'list_folder' => [
+                    'path' => get_option('fds_root_dropbox_folder', '/Website')
+                ],
+                'url' => $webhook_url
+            ];
+            
+            $result = $this->make_api_request('files/list_folder/longpoll', $params);
+            
+            if (is_wp_error($result)) {
+                throw new Exception($result->get_error_message());
+            }
+            
+            $this->logger->info("Webhook registered with Dropbox", [
+                'webhook_url' => $webhook_url
+            ]);
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("Failed to register webhook", [
+                'exception' => $e->getMessage()
+            ]);
+            
+            return false;
+        }
+    }
+    
+    /**
+     * Unregister a webhook with Dropbox.
+     *
+     * @return bool True on success, false on failure.
+     */
+    public function unregister_webhook() {
+        try {
+            $webhook_url = get_rest_url(null, 'fds/v1/webhook');
+            
+            $params = [
+                'url' => $webhook_url
+            ];
+            
+            $result = $this->make_api_request('files/list_folder/longpoll/stop', $params);
+            
+            if (is_wp_error($result)) {
+                throw new Exception($result->get_error_message());
+            }
+            
+            $this->logger->info("Webhook unregistered from Dropbox", [
+                'webhook_url' => $webhook_url
+            ]);
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("Failed to unregister webhook", [
+                'exception' => $e->getMessage()
+            ]);
+            
+            return false;
+        }
+    }
+
     /**
      * Make an API request with rate limiting and backoff.
      *
@@ -752,5 +1284,118 @@ class FDS_Dropbox_API {
         );
         
         return $result !== false;
+    }
+    
+    /**
+     * Handle AJAX for OAuth start.
+     */
+    public function ajax_oauth_start() {
+        check_ajax_referer('fds-admin-nonce', 'nonce');
+        
+        if (!current_user_can('manage_fds_settings')) {
+            wp_send_json_error(['message' => __('Permission denied.', 'filebird-dropbox-sync')]);
+        }
+        
+        // Generate CSRF token for OAuth
+        $csrf_token = wp_generate_password(32, false);
+        update_option('fds_oauth_csrf_token', $csrf_token);
+        
+        // Get app key
+        $app_key = get_option('fds_dropbox_app_key', '');
+        
+        if (empty($app_key)) {
+            wp_send_json_error(['message' => __('Dropbox App Key is not configured.', 'filebird-dropbox-sync')]);
+        }
+        
+        // Prepare redirect URL
+        $redirect_url = admin_url('admin-ajax.php') . '?action=fds_oauth_finish';
+        
+        // Build authorization URL
+        $auth_url = 'https://www.dropbox.com/oauth2/authorize?' . http_build_query([
+            'client_id' => $app_key,
+            'response_type' => 'code',
+            'redirect_uri' => $redirect_url,
+            'state' => $csrf_token,
+            'token_access_type' => 'offline',
+        ]);
+        
+        wp_send_json_success(['auth_url' => $auth_url]);
+    }
+    
+    /**
+     * Handle AJAX for OAuth finish.
+     */
+    public function ajax_oauth_finish() {
+        // Verify CSRF
+        $stored_csrf = get_option('fds_oauth_csrf_token', '');
+        $received_csrf = isset($_GET['state']) ? sanitize_text_field($_GET['state']) : '';
+        
+        if (empty($stored_csrf) || $stored_csrf !== $received_csrf) {
+            wp_redirect(admin_url('admin.php?page=filebird-dropbox-sync-settings&tab=dropbox&error=csrf'));
+            exit;
+        }
+        
+        // Get authorization code
+        $code = isset($_GET['code']) ? sanitize_text_field($_GET['code']) : '';
+        
+        if (empty($code)) {
+            wp_redirect(admin_url('admin.php?page=filebird-dropbox-sync-settings&tab=dropbox&error=code'));
+            exit;
+        }
+        
+        // Exchange code for token
+        $app_key = get_option('fds_dropbox_app_key', '');
+        $app_secret = get_option('fds_dropbox_app_secret', '');
+        $redirect_url = admin_url('admin-ajax.php') . '?action=fds_oauth_finish';
+        
+        $response = wp_remote_post('https://api.dropboxapi.com/oauth2/token', [
+            'body' => [
+                'code' => $code,
+                'grant_type' => 'authorization_code',
+                'client_id' => $app_key,
+                'client_secret' => $app_secret,
+                'redirect_uri' => $redirect_url,
+            ],
+            'timeout' => 15,
+        ]);
+        
+        if (is_wp_error($response)) {
+            wp_redirect(admin_url('admin.php?page=filebird-dropbox-sync-settings&tab=dropbox&error=request&message=' . urlencode($response->get_error_message())));
+            exit;
+        }
+        
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+        
+        if (empty($data) || isset($data['error'])) {
+            $error_msg = isset($data['error_description']) ? $data['error_description'] : 'Unknown error';
+            wp_redirect(admin_url('admin.php?page=filebird-dropbox-sync-settings&tab=dropbox&error=api&message=' . urlencode($error_msg)));
+            exit;
+        }
+        
+        // Store tokens
+        if (isset($data['access_token'])) {
+            update_option('fds_dropbox_access_token', $data['access_token']);
+            
+            if (isset($data['refresh_token'])) {
+                update_option('fds_dropbox_refresh_token', $data['refresh_token']);
+            }
+            
+            if (isset($data['expires_in'])) {
+                update_option('fds_dropbox_token_expiry', time() + $data['expires_in']);
+            }
+            
+            // Register webhook
+            $this->register_webhook();
+            
+            // Clear CSRF token
+            delete_option('fds_oauth_csrf_token');
+            
+            wp_redirect(admin_url('admin.php?page=filebird-dropbox-sync-settings&tab=dropbox&connected=1'));
+            exit;
+        } else {
+            wp_redirect(admin_url('admin.php?page=filebird-dropbox-sync-settings&tab=dropbox&error=token'));
+            exit;
+        }
     }
 }

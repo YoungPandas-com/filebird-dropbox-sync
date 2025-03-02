@@ -330,43 +330,76 @@ class FDS_File_Sync {
      * @return   boolean            True on success, false on failure.
      */
     public function process_file_create_task($task) {
-        $data = maybe_unserialize($task->data);
-        
-        if (empty($data['local_path']) || empty($data['dropbox_path']) || !file_exists($data['local_path'])) {
-            $this->logger->error("Missing file information in file create task", array(
-                'task' => $task
-            ));
-            return false;
-        }
-        
-        // Upload the file to Dropbox
-        $result = $this->dropbox_api->upload_file($data['local_path'], $data['dropbox_path'], true);
-        
-        if (!$result) {
-            $this->logger->error("Failed to upload file to Dropbox", array(
+        try {
+            $data = maybe_unserialize($task->data);
+            
+            // Validate input data
+            if (empty($data['local_path']) || empty($data['dropbox_path'])) {
+                throw new Exception("Missing required file information");
+            }
+            
+            if (!file_exists($data['local_path'])) {
+                throw new Exception("Local file does not exist: " . $data['local_path']);
+            }
+            
+            // Validate file size
+            $file_size = filesize($data['local_path']);
+            if ($file_size === 0) {
+                throw new Exception("File is empty: " . $data['local_path']);
+            }
+            
+            // Track operation timing
+            $start_time = microtime(true);
+            
+            // Upload the file to Dropbox
+            $result = $this->dropbox_api->upload_file($data['local_path'], $data['dropbox_path'], true);
+            
+            if (!$result) {
+                throw new Exception("Dropbox API upload failed");
+            }
+            
+            if (!isset($result['id'])) {
+                throw new Exception("Invalid response from Dropbox API: missing file ID");
+            }
+            
+            // Calculate content hash for verification
+            $sync_hash = md5_file($data['local_path']);
+            if (!$sync_hash) {
+                throw new Exception("Failed to calculate file hash");
+            }
+            
+            // Update mapping in database
+            $mapping_result = $this->db->add_or_update_file_mapping(
+                $data['attachment_id'],
+                $data['dropbox_path'],
+                $result['id'],
+                $sync_hash
+            );
+            
+            if (!$mapping_result) {
+                throw new Exception("Failed to update file mapping in database");
+            }
+            
+            // Log success with timing
+            $elapsed = microtime(true) - $start_time;
+            $this->logger->info("File uploaded to Dropbox successfully", [
                 'attachment_id' => $data['attachment_id'],
-                'local_path' => $data['local_path'],
-                'dropbox_path' => $data['dropbox_path']
-            ));
+                'dropbox_path' => $data['dropbox_path'],
+                'dropbox_file_id' => $result['id'],
+                'file_size' => $file_size,
+                'elapsed_seconds' => round($elapsed, 2)
+            ]);
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("File create task failed", [
+                'exception' => $e->getMessage(),
+                'task_id' => $task->id,
+                'attachment_id' => isset($data['attachment_id']) ? $data['attachment_id'] : 'unknown',
+                'dropbox_path' => isset($data['dropbox_path']) ? $data['dropbox_path'] : 'unknown'
+            ]);
             return false;
         }
-        
-        // Update mapping
-        $sync_hash = md5(file_get_contents($data['local_path']));
-        $this->db->add_or_update_file_mapping(
-            $data['attachment_id'],
-            $data['dropbox_path'],
-            $result['id'],
-            $sync_hash
-        );
-        
-        $this->logger->info("Uploaded file to Dropbox", array(
-            'attachment_id' => $data['attachment_id'],
-            'dropbox_path' => $data['dropbox_path'],
-            'dropbox_file_id' => $result['id']
-        ));
-        
-        return true;
     }
 
     /**
@@ -377,75 +410,92 @@ class FDS_File_Sync {
      * @return   boolean            True on success, false on failure.
      */
     public function process_file_update_task($task) {
-        $data = maybe_unserialize($task->data);
-        
-        // Check if this is a thumbnail task
-        $is_thumbnail = isset($data['size']) && !empty($data['size']);
-        
-        if ($is_thumbnail) {
-            if (empty($data['local_path']) || empty($data['dropbox_path']) || !file_exists($data['local_path'])) {
-                $this->logger->error("Missing thumbnail information in file update task", array(
-                    'task' => $task
-                ));
-                return false;
+        try {
+            $data = maybe_unserialize($task->data);
+            
+            // Check if this is a thumbnail task
+            $is_thumbnail = isset($data['size']) && !empty($data['size']);
+            
+            // Validate input data
+            if (empty($data['local_path']) || empty($data['dropbox_path'])) {
+                throw new Exception("Missing required file information");
             }
             
-            // Upload the thumbnail to Dropbox
-            $result = $this->dropbox_api->upload_file($data['local_path'], $data['dropbox_path'], true);
-            
-            if (!$result) {
-                $this->logger->error("Failed to upload thumbnail to Dropbox", array(
-                    'attachment_id' => $data['attachment_id'],
-                    'size' => $data['size'],
-                    'local_path' => $data['local_path'],
-                    'dropbox_path' => $data['dropbox_path']
-                ));
-                return false;
+            if (!file_exists($data['local_path'])) {
+                throw new Exception("Local file does not exist: " . $data['local_path']);
             }
             
-            $this->logger->info("Uploaded thumbnail to Dropbox", array(
-                'attachment_id' => $data['attachment_id'],
-                'size' => $data['size'],
-                'dropbox_path' => $data['dropbox_path']
-            ));
-            
-            return true;
-        } else {
-            if (empty($data['local_path']) || empty($data['dropbox_path']) || !file_exists($data['local_path'])) {
-                $this->logger->error("Missing file information in file update task", array(
-                    'task' => $task
-                ));
-                return false;
+            // Validate file size
+            $file_size = filesize($data['local_path']);
+            if ($file_size === 0) {
+                throw new Exception("File is empty: " . $data['local_path']);
             }
+            
+            // Track operation timing
+            $start_time = microtime(true);
             
             // Upload the file to Dropbox
             $result = $this->dropbox_api->upload_file($data['local_path'], $data['dropbox_path'], true);
             
             if (!$result) {
-                $this->logger->error("Failed to update file in Dropbox", array(
-                    'attachment_id' => $data['attachment_id'],
-                    'local_path' => $data['local_path'],
-                    'dropbox_path' => $data['dropbox_path']
-                ));
-                return false;
+                throw new Exception("Dropbox API upload failed");
             }
             
-            // Update mapping
-            $sync_hash = md5(file_get_contents($data['local_path']));
-            $this->db->add_or_update_file_mapping(
-                $data['attachment_id'],
-                $data['dropbox_path'],
-                $result['id'],
-                $sync_hash
-            );
+            if (!isset($result['id'])) {
+                throw new Exception("Invalid response from Dropbox API: missing file ID");
+            }
             
-            $this->logger->info("Updated file in Dropbox", array(
-                'attachment_id' => $data['attachment_id'],
-                'dropbox_path' => $data['dropbox_path'],
-                'dropbox_file_id' => $result['id']
-            ));
+            if (!$is_thumbnail) {
+                // Calculate content hash for verification
+                $sync_hash = md5_file($data['local_path']);
+                if (!$sync_hash) {
+                    throw new Exception("Failed to calculate file hash");
+                }
+                
+                // Update mapping in database
+                $mapping_result = $this->db->add_or_update_file_mapping(
+                    $data['attachment_id'],
+                    $data['dropbox_path'],
+                    $result['id'],
+                    $sync_hash
+                );
+                
+                if (!$mapping_result) {
+                    throw new Exception("Failed to update file mapping in database");
+                }
+            }
+            
+            // Log success with timing
+            $elapsed = microtime(true) - $start_time;
+            
+            if ($is_thumbnail) {
+                $this->logger->info("Thumbnail uploaded to Dropbox successfully", [
+                    'attachment_id' => $data['attachment_id'],
+                    'size' => $data['size'],
+                    'dropbox_path' => $data['dropbox_path'],
+                    'file_size' => $file_size,
+                    'elapsed_seconds' => round($elapsed, 2)
+                ]);
+            } else {
+                $this->logger->info("File updated in Dropbox successfully", [
+                    'attachment_id' => $data['attachment_id'],
+                    'dropbox_path' => $data['dropbox_path'],
+                    'dropbox_file_id' => $result['id'],
+                    'file_size' => $file_size,
+                    'elapsed_seconds' => round($elapsed, 2)
+                ]);
+            }
             
             return true;
+        } catch (Exception $e) {
+            $this->logger->error("File update task failed", [
+                'exception' => $e->getMessage(),
+                'task_id' => $task->id,
+                'attachment_id' => isset($data['attachment_id']) ? $data['attachment_id'] : 'unknown',
+                'dropbox_path' => isset($data['dropbox_path']) ? $data['dropbox_path'] : 'unknown',
+                'is_thumbnail' => isset($is_thumbnail) ? $is_thumbnail : false
+            ]);
+            return false;
         }
     }
 
@@ -457,54 +507,77 @@ class FDS_File_Sync {
      * @return   boolean            True on success, false on failure.
      */
     public function process_file_delete_task($task) {
-        $data = maybe_unserialize($task->data);
-        
-        if (empty($data['dropbox_path'])) {
-            $this->logger->error("Missing dropbox path in file delete task", array(
-                'task' => $task
-            ));
-            return false;
-        }
-        
-        // Delete the file from Dropbox
-        $result = $this->dropbox_api->delete_file($data['dropbox_path']);
-        
-        if (!$result) {
-            $this->logger->error("Failed to delete file from Dropbox", array(
-                'attachment_id' => $data['attachment_id'],
-                'dropbox_path' => $data['dropbox_path']
-            ));
-            return false;
-        }
-        
-        // Delete mapping
-        $this->db->delete_file_mapping_by_attachment_id($data['attachment_id']);
-        
-        $this->logger->info("Deleted file from Dropbox", array(
-            'attachment_id' => $data['attachment_id'],
-            'dropbox_path' => $data['dropbox_path']
-        ));
-        
-        // Try to delete thumbnails
-        $metadata = wp_get_attachment_metadata($data['attachment_id']);
-        
-        if (isset($metadata['sizes']) && is_array($metadata['sizes'])) {
-            foreach ($metadata['sizes'] as $size => $info) {
-                if (isset($info['file'])) {
-                    $thumb_path = dirname($data['dropbox_path']) . '/' . $info['file'];
-                    
-                    $this->dropbox_api->delete_file($thumb_path);
-                    
-                    $this->logger->debug("Deleted thumbnail from Dropbox", array(
-                        'attachment_id' => $data['attachment_id'],
-                        'size' => $size,
-                        'dropbox_path' => $thumb_path
-                    ));
+        try {
+            $data = maybe_unserialize($task->data);
+            
+            // Validate input data
+            if (empty($data['dropbox_path'])) {
+                throw new Exception("Missing dropbox path in file delete task");
+            }
+            
+            if (empty($data['attachment_id'])) {
+                throw new Exception("Missing attachment ID in file delete task");
+            }
+            
+            // Track operation timing
+            $start_time = microtime(true);
+            
+            // Delete the file from Dropbox
+            $result = $this->dropbox_api->delete_file($data['dropbox_path']);
+            
+            if (!$result) {
+                throw new Exception("Dropbox API delete failed");
+            }
+            
+            // Delete mapping
+            $mapping_result = $this->db->delete_file_mapping_by_attachment_id($data['attachment_id']);
+            
+            if (!$mapping_result) {
+                throw new Exception("Failed to delete file mapping from database");
+            }
+            
+            // Try to delete thumbnails
+            $deleted_thumbs = 0;
+            $metadata = wp_get_attachment_metadata($data['attachment_id']);
+            
+            if (isset($metadata['sizes']) && is_array($metadata['sizes'])) {
+                foreach ($metadata['sizes'] as $size => $info) {
+                    if (isset($info['file'])) {
+                        $thumb_path = dirname($data['dropbox_path']) . '/' . $info['file'];
+                        
+                        $thumb_result = $this->dropbox_api->delete_file($thumb_path);
+                        
+                        if ($thumb_result) {
+                            $deleted_thumbs++;
+                            $this->logger->debug("Deleted thumbnail from Dropbox", [
+                                'attachment_id' => $data['attachment_id'],
+                                'size' => $size,
+                                'dropbox_path' => $thumb_path
+                            ]);
+                        }
+                    }
                 }
             }
+            
+            // Log success with timing
+            $elapsed = microtime(true) - $start_time;
+            $this->logger->info("File deleted from Dropbox successfully", [
+                'attachment_id' => $data['attachment_id'],
+                'dropbox_path' => $data['dropbox_path'],
+                'deleted_thumbnails' => $deleted_thumbs,
+                'elapsed_seconds' => round($elapsed, 2)
+            ]);
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("File delete task failed", [
+                'exception' => $e->getMessage(),
+                'task_id' => $task->id,
+                'attachment_id' => isset($data['attachment_id']) ? $data['attachment_id'] : 'unknown',
+                'dropbox_path' => isset($data['dropbox_path']) ? $data['dropbox_path'] : 'unknown'
+            ]);
+            return false;
         }
-        
-        return true;
     }
 
     /**
@@ -515,79 +588,86 @@ class FDS_File_Sync {
      * @return   boolean            True on success, false on failure.
      */
     public function process_file_move_task($task) {
-        $data = maybe_unserialize($task->data);
-        
-        // Check if this is a thumbnail task
-        $is_thumbnail = isset($data['size']) && !empty($data['size']);
-        
-        if ($is_thumbnail) {
+        try {
+            $data = maybe_unserialize($task->data);
+            
+            // Check if this is a thumbnail task
+            $is_thumbnail = isset($data['size']) && !empty($data['size']);
+            
+            // Validate input data
             if (empty($data['old_path']) || empty($data['new_path'])) {
-                $this->logger->error("Missing thumbnail path information in file move task", array(
-                    'task' => $task
-                ));
-                return false;
+                throw new Exception("Missing path information in file move task");
             }
             
-            // Move the thumbnail in Dropbox
-            $result = $this->dropbox_api->move_file($data['old_path'], $data['new_path']);
-            
-            if (!$result) {
-                $this->logger->error("Failed to move thumbnail in Dropbox", array(
-                    'attachment_id' => $data['attachment_id'],
-                    'size' => $data['size'],
-                    'old_path' => $data['old_path'],
-                    'new_path' => $data['new_path']
-                ));
-                return false;
+            if (!$is_thumbnail && empty($data['attachment_id'])) {
+                throw new Exception("Missing attachment ID in file move task");
             }
             
-            $this->logger->info("Moved thumbnail in Dropbox", array(
-                'attachment_id' => $data['attachment_id'],
-                'size' => $data['size'],
-                'old_path' => $data['old_path'],
-                'new_path' => $data['new_path']
-            ));
-            
-            return true;
-        } else {
-            if (empty($data['old_path']) || empty($data['new_path'])) {
-                $this->logger->error("Missing path information in file move task", array(
-                    'task' => $task
-                ));
-                return false;
-            }
+            // Track operation timing
+            $start_time = microtime(true);
             
             // Move the file in Dropbox
             $result = $this->dropbox_api->move_file($data['old_path'], $data['new_path']);
             
             if (!$result) {
-                $this->logger->error("Failed to move file in Dropbox", array(
-                    'attachment_id' => $data['attachment_id'],
-                    'old_path' => $data['old_path'],
-                    'new_path' => $data['new_path']
-                ));
-                return false;
+                throw new Exception("Dropbox API move failed");
             }
             
-            // Update mapping
-            $mapping = $this->db->get_file_mapping_by_attachment_id($data['attachment_id']);
+            if (!isset($result['id']) && !$is_thumbnail) {
+                throw new Exception("Invalid response from Dropbox API: missing file ID");
+            }
             
-            if ($mapping) {
-                $this->db->add_or_update_file_mapping(
+            // Update mapping for main file
+            if (!$is_thumbnail) {
+                $mapping = $this->db->get_file_mapping_by_attachment_id($data['attachment_id']);
+                
+                if (!$mapping) {
+                    throw new Exception("File mapping not found for attachment ID: " . $data['attachment_id']);
+                }
+                
+                $mapping_result = $this->db->add_or_update_file_mapping(
                     $data['attachment_id'],
                     $data['new_path'],
-                    $mapping->dropbox_file_id,
+                    isset($result['id']) ? $result['id'] : $mapping->dropbox_file_id,
                     $mapping->sync_hash
                 );
+                
+                if (!$mapping_result) {
+                    throw new Exception("Failed to update file mapping in database");
+                }
             }
             
-            $this->logger->info("Moved file in Dropbox", array(
-                'attachment_id' => $data['attachment_id'],
-                'old_path' => $data['old_path'],
-                'new_path' => $data['new_path']
-            ));
+            // Log success with timing
+            $elapsed = microtime(true) - $start_time;
+            
+            if ($is_thumbnail) {
+                $this->logger->info("Thumbnail moved in Dropbox successfully", [
+                    'attachment_id' => $data['attachment_id'],
+                    'size' => $data['size'],
+                    'old_path' => $data['old_path'],
+                    'new_path' => $data['new_path'],
+                    'elapsed_seconds' => round($elapsed, 2)
+                ]);
+            } else {
+                $this->logger->info("File moved in Dropbox successfully", [
+                    'attachment_id' => $data['attachment_id'],
+                    'old_path' => $data['old_path'],
+                    'new_path' => $data['new_path'],
+                    'elapsed_seconds' => round($elapsed, 2)
+                ]);
+            }
             
             return true;
+        } catch (Exception $e) {
+            $this->logger->error("File move task failed", [
+                'exception' => $e->getMessage(),
+                'task_id' => $task->id,
+                'attachment_id' => isset($data['attachment_id']) ? $data['attachment_id'] : 'unknown',
+                'old_path' => isset($data['old_path']) ? $data['old_path'] : 'unknown',
+                'new_path' => isset($data['new_path']) ? $data['new_path'] : 'unknown',
+                'is_thumbnail' => isset($is_thumbnail) ? $is_thumbnail : false
+            ]);
+            return false;
         }
     }
 

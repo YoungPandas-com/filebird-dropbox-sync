@@ -236,6 +236,199 @@ class FDS_Performance {
     }
     
     /**
+     * Enhanced chunked file upload with reliability improvements.
+     * 
+     * @param string $local_path Local file path.
+     * @param string $dropbox_path Dropbox destination path.
+     * @param int $chunk_size Optional chunk size in bytes.
+     * @return array|false File metadata or false on failure.
+     */
+    public function enhanced_chunked_upload($local_path, $dropbox_path, $chunk_size = null) {
+        if (!$chunk_size) {
+            $chunk_size = get_option('fds_chunk_size', 8388608); // Default 8MB
+        }
+        
+        if (!file_exists($local_path)) {
+            $this->logger->error("File not found for chunked upload", [
+                'local_path' => $local_path
+            ]);
+            return false;
+        }
+        
+        $file_size = filesize($local_path);
+        if ($file_size <= 0) {
+            $this->logger->error("Invalid file size for upload", [
+                'local_path' => $local_path,
+                'size' => $file_size
+            ]);
+            return false;
+        }
+        
+        $dropbox_api = new FDS_Dropbox_API(new FDS_Settings(), $this->logger);
+        
+        try {
+            $file_handle = fopen($local_path, 'rb');
+            if (!$file_handle) {
+                throw new Exception("Cannot open file for reading");
+            }
+            
+            // Track progress
+            $start_time = microtime(true);
+            $bytes_uploaded = 0;
+            $session_id = null;
+            
+            // Initialize session with retry
+            $max_retries = 3;
+            $retry = 0;
+            
+            do {
+                try {
+                    $chunk = fread($file_handle, $chunk_size);
+                    if ($chunk === false) {
+                        throw new Exception("Failed to read initial chunk");
+                    }
+                    
+                    $session_id = $dropbox_api->start_upload_session($chunk);
+                    if (is_wp_error($session_id)) {
+                        throw new Exception($session_id->get_error_message());
+                    }
+                    
+                    // Track progress
+                    $bytes_uploaded += strlen($chunk);
+                    $success = true;
+                } catch (Exception $e) {
+                    $retry++;
+                    if ($retry >= $max_retries) {
+                        throw new Exception("Failed to start upload session after {$max_retries} attempts: " . $e->getMessage());
+                    }
+                    
+                    $this->logger->warning("Retrying session start", [
+                        'retry' => $retry,
+                        'error' => $e->getMessage()
+                    ]);
+                    
+                    // Reset file pointer for retry
+                    rewind($file_handle);
+                    $bytes_uploaded = 0;
+                    
+                    // Exponential backoff
+                    sleep(pow(2, $retry));
+                    $success = false;
+                }
+            } while (!$success);
+            
+            // Upload remaining chunks
+            while ($bytes_uploaded < $file_size) {
+                // Calculate bytes remaining
+                $bytes_remaining = $file_size - $bytes_uploaded;
+                $bytes_to_read = min($bytes_remaining, $chunk_size);
+                
+                // Read chunk
+                $chunk = fread($file_handle, $bytes_to_read);
+                if ($chunk === false) {
+                    throw new Exception("Failed to read chunk at offset {$bytes_uploaded}");
+                }
+                
+                // Upload with retry
+                $retry = 0;
+                $success = false;
+                
+                while (!$success && $retry < $max_retries) {
+                    try {
+                        $result = $dropbox_api->append_to_upload_session($session_id, $chunk, $bytes_uploaded);
+                        if (is_wp_error($result)) {
+                            throw new Exception($result->get_error_message());
+                        }
+                        
+                        $bytes_uploaded += strlen($chunk);
+                        $success = true;
+                        
+                        // Log progress for large files
+                        if ($file_size > 100 * 1024 * 1024) { // 100MB
+                            $percent = round(($bytes_uploaded / $file_size) * 100);
+                            $this->logger->debug("Upload progress", [
+                                'percent' => $percent,
+                                'bytes' => $bytes_uploaded,
+                                'total' => $file_size
+                            ]);
+                        }
+                    } catch (Exception $e) {
+                        $retry++;
+                        $this->logger->warning("Chunk upload failed, retrying", [
+                            'retry' => $retry,
+                            'offset' => $bytes_uploaded,
+                            'error' => $e->getMessage()
+                        ]);
+                        
+                        if ($retry >= $max_retries) {
+                            throw new Exception("Failed to upload chunk after {$max_retries} attempts: " . $e->getMessage());
+                        }
+                        
+                        // Exponential backoff
+                        sleep(pow(2, $retry));
+                    }
+                }
+            }
+            
+            // Finish upload
+            $retry = 0;
+            $success = false;
+            
+            while (!$success && $retry < $max_retries) {
+                try {
+                    $result = $dropbox_api->finish_upload_session($session_id, $dropbox_path, $file_size);
+                    if (is_wp_error($result)) {
+                        throw new Exception($result->get_error_message());
+                    }
+                    
+                    $success = true;
+                } catch (Exception $e) {
+                    $retry++;
+                    $this->logger->warning("Failed to finish upload, retrying", [
+                        'retry' => $retry,
+                        'error' => $e->getMessage()
+                    ]);
+                    
+                    if ($retry >= $max_retries) {
+                        throw new Exception("Failed to finish upload after {$max_retries} attempts: " . $e->getMessage());
+                    }
+                    
+                    // Exponential backoff
+                    sleep(pow(2, $retry));
+                }
+            }
+            
+            // Close file
+            fclose($file_handle);
+            
+            // Calculate upload stats
+            $elapsed = microtime(true) - $start_time;
+            $speed_kbps = round(($file_size / 1024) / $elapsed, 2);
+            
+            $this->logger->info("Chunked upload completed successfully", [
+                'path' => $dropbox_path,
+                'size' => $file_size,
+                'elapsed_seconds' => round($elapsed, 2),
+                'speed_kbps' => $speed_kbps
+            ]);
+            
+            return $result;
+        } catch (Exception $e) {
+            if (isset($file_handle) && is_resource($file_handle)) {
+                fclose($file_handle);
+            }
+            
+            $this->logger->error("Chunked upload failed", [
+                'exception' => $e->getMessage(),
+                'file' => $local_path,
+                'destination' => $dropbox_path
+            ]);
+            
+            return false;
+        }
+    }
+    
+    /**
      * Delta sync for efficiently handling initial large-scale synchronization.
      * 
      * @param FDS_Dropbox_API $dropbox_api Dropbox API instance.

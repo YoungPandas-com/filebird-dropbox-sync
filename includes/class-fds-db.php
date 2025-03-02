@@ -248,6 +248,75 @@ class FDS_DB {
             );
         }
     }
+    
+    /**
+     * Add or update multiple file mappings in a single transaction.
+     *
+     * @since    1.0.0
+     * @param    array    $mappings    Array of mapping data [attachment_id => [dropbox_path, dropbox_file_id, sync_hash]]
+     * @return   int|false             The number of rows affected or false on error.
+     */
+    public function batch_update_file_mappings($mappings) {
+        global $wpdb;
+        
+        if (empty($mappings)) {
+            return 0;
+        }
+        
+        $table_name = $wpdb->prefix . 'fds_file_mapping';
+        $rows_affected = 0;
+        
+        // Start transaction
+        $wpdb->query('START TRANSACTION');
+        
+        try {
+            foreach ($mappings as $attachment_id => $data) {
+                if (empty($data['dropbox_path']) || empty($data['dropbox_file_id']) || empty($data['sync_hash'])) {
+                    continue;
+                }
+                
+                $existing = $this->get_file_mapping_by_attachment_id($attachment_id);
+                
+                $mapping_data = array(
+                    'attachment_id' => $attachment_id,
+                    'dropbox_path' => $data['dropbox_path'],
+                    'dropbox_path_hash' => md5($data['dropbox_path']),
+                    'dropbox_file_id' => $data['dropbox_file_id'],
+                    'last_synced' => current_time('mysql'),
+                    'sync_hash' => $data['sync_hash'],
+                );
+                
+                if ($existing) {
+                    $result = $wpdb->update(
+                        $table_name,
+                        $mapping_data,
+                        array('attachment_id' => $attachment_id)
+                    );
+                } else {
+                    $result = $wpdb->insert($table_name, $mapping_data);
+                }
+                
+                if ($result === false) {
+                    throw new Exception("Database error: " . $wpdb->last_error);
+                }
+                
+                $rows_affected += $result;
+            }
+            
+            // Commit transaction
+            $wpdb->query('COMMIT');
+            
+            return $rows_affected;
+        } catch (Exception $e) {
+            // Rollback on error
+            $wpdb->query('ROLLBACK');
+            
+            // Log error
+            error_log("Batch update file mappings failed: " . $e->getMessage());
+            
+            return false;
+        }
+    }
 
     /**
      * Delete file mapping by attachment ID.

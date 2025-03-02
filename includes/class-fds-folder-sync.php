@@ -256,37 +256,59 @@ class FDS_Folder_Sync {
      * @return   boolean            True on success, false on failure.
      */
     public function process_folder_create_task($task) {
-        $data = maybe_unserialize($task->data);
-        
-        if (empty($data['folder_path'])) {
-            $this->logger->error("Missing folder path in folder create task", array(
-                'task' => $task
-            ));
-            return false;
-        }
-        
-        // Create the folder in Dropbox
-        $result = $this->dropbox_api->create_folder($data['folder_path']);
-        
-        if (!$result) {
-            $this->logger->error("Failed to create folder in Dropbox", array(
+        try {
+            $data = maybe_unserialize($task->data);
+            
+            // Validate input data
+            if (empty($data['folder_path'])) {
+                throw new Exception("Missing folder path in folder create task");
+            }
+            
+            if (empty($data['folder_id']) || !is_numeric($data['folder_id'])) {
+                throw new Exception("Missing or invalid folder ID");
+            }
+            
+            // Track operation timing
+            $start_time = microtime(true);
+            
+            // Create the folder in Dropbox
+            $result = $this->dropbox_api->create_folder($data['folder_path']);
+            
+            if (!$result) {
+                throw new Exception("Dropbox API create folder failed");
+            }
+            
+            // Update mapping
+            $sync_hash = md5($data['folder_path'] . time());
+            $mapping_result = $this->db->add_or_update_folder_mapping(
+                $data['folder_id'], 
+                $data['folder_path'], 
+                $sync_hash
+            );
+            
+            if (!$mapping_result) {
+                throw new Exception("Failed to update folder mapping in database");
+            }
+            
+            // Log success with timing
+            $elapsed = microtime(true) - $start_time;
+            $this->logger->info("Folder created in Dropbox successfully", [
                 'folder_id' => $data['folder_id'],
-                'folder_path' => $data['folder_path']
-            ));
+                'folder_path' => $data['folder_path'],
+                'folder_name' => isset($data['folder_name']) ? $data['folder_name'] : basename($data['folder_path']),
+                'elapsed_seconds' => round($elapsed, 2)
+            ]);
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("Folder create task failed", [
+                'exception' => $e->getMessage(),
+                'task_id' => $task->id,
+                'folder_id' => isset($data['folder_id']) ? $data['folder_id'] : 'unknown',
+                'folder_path' => isset($data['folder_path']) ? $data['folder_path'] : 'unknown'
+            ]);
             return false;
         }
-        
-        // Update mapping
-        $sync_hash = md5($data['folder_path'] . time());
-        $this->db->add_or_update_folder_mapping($data['folder_id'], $data['folder_path'], $sync_hash);
-        
-        $this->logger->info("Created folder in Dropbox", array(
-            'folder_id' => $data['folder_id'],
-            'folder_path' => $data['folder_path'],
-            'dropbox_result' => $result
-        ));
-        
-        return true;
     }
 
     /**
@@ -297,41 +319,78 @@ class FDS_Folder_Sync {
      * @return   boolean            True on success, false on failure.
      */
     public function process_folder_rename_task($task) {
-        $data = maybe_unserialize($task->data);
-        
-        if (empty($data['old_path']) || empty($data['new_path'])) {
-            $this->logger->error("Missing path information in folder rename task", array(
-                'task' => $task
-            ));
-            return false;
-        }
-        
-        // Move (rename) the folder in Dropbox
-        $result = $this->dropbox_api->move_folder($data['old_path'], $data['new_path']);
-        
-        if (!$result) {
-            $this->logger->error("Failed to rename folder in Dropbox", array(
+        try {
+            $data = maybe_unserialize($task->data);
+            
+            // Validate input data
+            if (empty($data['old_path']) || empty($data['new_path'])) {
+                throw new Exception("Missing path information in folder rename task");
+            }
+            
+            if (empty($data['folder_id']) || !is_numeric($data['folder_id'])) {
+                throw new Exception("Missing or invalid folder ID");
+            }
+            
+            // Track operation timing
+            $start_time = microtime(true);
+            
+            // Move (rename) the folder in Dropbox
+            $result = $this->dropbox_api->move_folder($data['old_path'], $data['new_path']);
+            
+            if (!$result) {
+                throw new Exception("Dropbox API rename folder failed");
+            }
+            
+            global $wpdb;
+            
+            // Start transaction for database operations
+            $wpdb->query('START TRANSACTION');
+            
+            try {
+                // Update folder mapping
+                $sync_hash = md5($data['new_path'] . time());
+                $mapping_result = $this->db->add_or_update_folder_mapping(
+                    $data['folder_id'], 
+                    $data['new_path'], 
+                    $sync_hash
+                );
+                
+                if (!$mapping_result) {
+                    throw new Exception("Failed to update folder mapping in database");
+                }
+                
+                // Update child file mappings to use the new path
+                $this->update_child_file_paths($data['old_path'], $data['new_path']);
+                
+                // Commit transaction
+                $wpdb->query('COMMIT');
+            } catch (Exception $inner_exception) {
+                // Rollback transaction on database error
+                $wpdb->query('ROLLBACK');
+                throw new Exception("Database operation failed: " . $inner_exception->getMessage());
+            }
+            
+            // Log success with timing
+            $elapsed = microtime(true) - $start_time;
+            $this->logger->info("Folder renamed in Dropbox successfully", [
                 'folder_id' => $data['folder_id'],
                 'old_path' => $data['old_path'],
-                'new_path' => $data['new_path']
-            ));
+                'new_path' => $data['new_path'],
+                'new_name' => isset($data['new_name']) ? $data['new_name'] : basename($data['new_path']),
+                'elapsed_seconds' => round($elapsed, 2)
+            ]);
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("Folder rename task failed", [
+                'exception' => $e->getMessage(),
+                'task_id' => $task->id,
+                'folder_id' => isset($data['folder_id']) ? $data['folder_id'] : 'unknown',
+                'old_path' => isset($data['old_path']) ? $data['old_path'] : 'unknown',
+                'new_path' => isset($data['new_path']) ? $data['new_path'] : 'unknown'
+            ]);
             return false;
         }
-        
-        // Update mapping
-        $sync_hash = md5($data['new_path'] . time());
-        $this->db->add_or_update_folder_mapping($data['folder_id'], $data['new_path'], $sync_hash);
-        
-        // Update child file mappings to use the new path
-        $this->update_child_file_paths($data['old_path'], $data['new_path']);
-        
-        $this->logger->info("Renamed folder in Dropbox", array(
-            'folder_id' => $data['folder_id'],
-            'old_path' => $data['old_path'],
-            'new_path' => $data['new_path']
-        ));
-        
-        return true;
     }
 
     /**
@@ -342,38 +401,70 @@ class FDS_Folder_Sync {
      * @return   boolean            True on success, false on failure.
      */
     public function process_folder_delete_task($task) {
-        $data = maybe_unserialize($task->data);
-        
-        if (empty($data['folder_path'])) {
-            $this->logger->error("Missing folder path in folder delete task", array(
-                'task' => $task
-            ));
-            return false;
-        }
-        
-        // Delete the folder in Dropbox
-        $result = $this->dropbox_api->delete_folder($data['folder_path']);
-        
-        if (!$result) {
-            $this->logger->error("Failed to delete folder in Dropbox", array(
+        try {
+            $data = maybe_unserialize($task->data);
+            
+            // Validate input data
+            if (empty($data['folder_path'])) {
+                throw new Exception("Missing folder path in folder delete task");
+            }
+            
+            if (empty($data['folder_id']) || !is_numeric($data['folder_id'])) {
+                throw new Exception("Missing or invalid folder ID");
+            }
+            
+            // Track operation timing
+            $start_time = microtime(true);
+            
+            // Delete the folder in Dropbox
+            $result = $this->dropbox_api->delete_folder($data['folder_path']);
+            
+            if (!$result) {
+                throw new Exception("Dropbox API delete folder failed");
+            }
+            
+            global $wpdb;
+            
+            // Start transaction for database operations
+            $wpdb->query('START TRANSACTION');
+            
+            try {
+                // Delete mapping
+                $mapping_result = $this->db->delete_folder_mapping_by_folder_id($data['folder_id']);
+                
+                if ($mapping_result === false) {
+                    throw new Exception("Failed to delete folder mapping from database");
+                }
+                
+                // Delete related file mappings
+                $this->delete_child_file_mappings($data['folder_path']);
+                
+                // Commit transaction
+                $wpdb->query('COMMIT');
+            } catch (Exception $inner_exception) {
+                // Rollback transaction on database error
+                $wpdb->query('ROLLBACK');
+                throw new Exception("Database operation failed: " . $inner_exception->getMessage());
+            }
+            
+            // Log success with timing
+            $elapsed = microtime(true) - $start_time;
+            $this->logger->info("Folder deleted from Dropbox successfully", [
                 'folder_id' => $data['folder_id'],
-                'folder_path' => $data['folder_path']
-            ));
+                'folder_path' => $data['folder_path'],
+                'elapsed_seconds' => round($elapsed, 2)
+            ]);
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("Folder delete task failed", [
+                'exception' => $e->getMessage(),
+                'task_id' => $task->id,
+                'folder_id' => isset($data['folder_id']) ? $data['folder_id'] : 'unknown',
+                'folder_path' => isset($data['folder_path']) ? $data['folder_path'] : 'unknown'
+            ]);
             return false;
         }
-        
-        // Delete mapping
-        $this->db->delete_folder_mapping_by_folder_id($data['folder_id']);
-        
-        // Delete related file mappings
-        $this->delete_child_file_mappings($data['folder_path']);
-        
-        $this->logger->info("Deleted folder in Dropbox", array(
-            'folder_id' => $data['folder_id'],
-            'folder_path' => $data['folder_path']
-        ));
-        
-        return true;
     }
 
     /**
@@ -384,41 +475,78 @@ class FDS_Folder_Sync {
      * @return   boolean            True on success, false on failure.
      */
     public function process_folder_move_task($task) {
-        $data = maybe_unserialize($task->data);
-        
-        if (empty($data['old_path']) || empty($data['new_path'])) {
-            $this->logger->error("Missing path information in folder move task", array(
-                'task' => $task
-            ));
-            return false;
-        }
-        
-        // Move the folder in Dropbox
-        $result = $this->dropbox_api->move_folder($data['old_path'], $data['new_path']);
-        
-        if (!$result) {
-            $this->logger->error("Failed to move folder in Dropbox", array(
+        try {
+            $data = maybe_unserialize($task->data);
+            
+            // Validate input data
+            if (empty($data['old_path']) || empty($data['new_path'])) {
+                throw new Exception("Missing path information in folder move task");
+            }
+            
+            if (empty($data['folder_id']) || !is_numeric($data['folder_id'])) {
+                throw new Exception("Missing or invalid folder ID");
+            }
+            
+            // Track operation timing
+            $start_time = microtime(true);
+            
+            // Move the folder in Dropbox
+            $result = $this->dropbox_api->move_folder($data['old_path'], $data['new_path']);
+            
+            if (!$result) {
+                throw new Exception("Dropbox API move folder failed");
+            }
+            
+            global $wpdb;
+            
+            // Start transaction for database operations
+            $wpdb->query('START TRANSACTION');
+            
+            try {
+                // Update mapping
+                $sync_hash = md5($data['new_path'] . time());
+                $mapping_result = $this->db->add_or_update_folder_mapping(
+                    $data['folder_id'], 
+                    $data['new_path'], 
+                    $sync_hash
+                );
+                
+                if (!$mapping_result) {
+                    throw new Exception("Failed to update folder mapping in database");
+                }
+                
+                // Update child file mappings to use the new path
+                $this->update_child_file_paths($data['old_path'], $data['new_path']);
+                
+                // Commit transaction
+                $wpdb->query('COMMIT');
+            } catch (Exception $inner_exception) {
+                // Rollback transaction on database error
+                $wpdb->query('ROLLBACK');
+                throw new Exception("Database operation failed: " . $inner_exception->getMessage());
+            }
+            
+            // Log success with timing
+            $elapsed = microtime(true) - $start_time;
+            $this->logger->info("Folder moved in Dropbox successfully", [
                 'folder_id' => $data['folder_id'],
                 'old_path' => $data['old_path'],
-                'new_path' => $data['new_path']
-            ));
+                'new_path' => $data['new_path'],
+                'new_parent_id' => isset($data['new_parent_id']) ? $data['new_parent_id'] : 'unknown',
+                'elapsed_seconds' => round($elapsed, 2)
+            ]);
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("Folder move task failed", [
+                'exception' => $e->getMessage(),
+                'task_id' => $task->id,
+                'folder_id' => isset($data['folder_id']) ? $data['folder_id'] : 'unknown',
+                'old_path' => isset($data['old_path']) ? $data['old_path'] : 'unknown',
+                'new_path' => isset($data['new_path']) ? $data['new_path'] : 'unknown'
+            ]);
             return false;
         }
-        
-        // Update mapping
-        $sync_hash = md5($data['new_path'] . time());
-        $this->db->add_or_update_folder_mapping($data['folder_id'], $data['new_path'], $sync_hash);
-        
-        // Update child file mappings to use the new path
-        $this->update_child_file_paths($data['old_path'], $data['new_path']);
-        
-        $this->logger->info("Moved folder in Dropbox", array(
-            'folder_id' => $data['folder_id'],
-            'old_path' => $data['old_path'],
-            'new_path' => $data['new_path']
-        ));
-        
-        return true;
     }
 
     /**
