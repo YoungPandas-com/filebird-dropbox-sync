@@ -5,45 +5,148 @@
 /* General styles */
 .fds-settings-container {
     margin-top: 20px;
-    max-width: 800px;
+    max-width: 900px;
+}
+
+.fds-settings-section {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.04);
+}
+
+.fds-section-header {
+    margin-bottom: 20px;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 15px;
+}
+
+.fds-section-header h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #23282d;
+    font-size: 1.3em;
+}
+
+.fds-form label {
+    font-weight: 600;
+    display: block;
+    margin-bottom: 5px;
 }
 
 .fds-field-group {
+    margin-bottom: 20px;
+}
+
+/* Connection Guide */
+.fds-connection-guide {
+    background: #f9f9f9;
+    border-left: 4px solid #2271b1;
+    padding: 15px;
+    margin-bottom: 20px;
+}
+
+.fds-step-list {
+    margin: 0;
+    padding-left: 25px;
+}
+
+.fds-step-list li {
     margin-bottom: 15px;
 }
 
-.fds-field-group label {
+.fds-step-list li strong {
     display: block;
     margin-bottom: 5px;
-    font-weight: 600;
+    color: #2271b1;
+}
+
+.fds-permission-list {
+    background: #f0f0f1;
+    padding: 10px 15px;
+    border-radius: 3px;
+    margin: 10px 0;
+}
+
+.fds-code-box {
+    background: #f0f0f1;
+    padding: 10px 15px;
+    border-radius: 3px;
+    margin: 10px 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.fds-code-box code {
+    background: none;
+    padding: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: #3c434a;
+    font-size: 13px;
+}
+
+.fds-instruction-box {
+    background: #f0f6fc;
+    padding: 15px;
+    border-radius: 3px;
+    margin: 15px 0;
+}
+
+.fds-instruction-box h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #2271b1;
+}
+
+.fds-note {
+    font-style: italic;
+    color: #666;
 }
 
 /* Sync controls */
 .fds-sync-controls {
+    margin: 20px 0;
+    padding: 20px;
     background: #fff;
     border: 1px solid #ccd0d4;
     border-radius: 4px;
-    padding: 15px;
-    margin: 20px 0;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.04);
+}
+
+.fds-sync-controls h3 {
+    margin-top: 0;
+    color: #23282d;
+}
+
+.fds-action-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
 }
 
 .fds-status-indicator {
     display: inline-block;
     margin-left: 10px;
     font-style: italic;
+    color: #646970;
 }
 
 .fds-progress-container {
     margin-top: 15px;
-    padding: 10px;
+    padding: 15px;
     background: #f9f9f9;
     border-radius: 4px;
+    border: 1px solid #eee;
 }
 
 .fds-progress-bar-wrapper {
     height: 20px;
     background-color: #e5e5e5;
-    border-radius: 3px;
+    border-radius: 10px;
     overflow: hidden;
     margin-bottom: 10px;
 }
@@ -52,26 +155,99 @@
     height: 100%;
     width: 0;
     background-color: #2271b1;
-    transition: width 0.3s ease;
+    transition: width 0.5s ease;
 }
 
 .fds-progress-details {
     display: flex;
     justify-content: space-between;
-    font-size: 12px;
+    font-size: 13px;
     color: #50575e;
+}
+
+/* Sync Dashboard */
+.fds-sync-dashboard {
+    margin: 20px 0;
+    padding: 20px;
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.04);
+}
+
+.fds-sync-dashboard h3 {
+    margin-top: 0;
+    color: #23282d;
+}
+
+.fds-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 15px;
+    margin: 20px 0;
+}
+
+.fds-stat-card {
+    padding: 15px;
+    border-radius: 4px;
+    border-left: 4px solid;
+}
+
+.fds-stat-blue {
+    background: #f0f6fc;
+    border-left-color: #2271b1;
+}
+
+.fds-stat-green {
+    background: #f0fdf0;
+    border-left-color: #4ab866;
+}
+
+.fds-stat-yellow {
+    background: #fcf9e8;
+    border-left-color: #dba617;
+}
+
+.fds-stat-red {
+    background: #fcf0f1;
+    border-left-color: #d63638;
+}
+
+.fds-stat-card h4 {
+    margin: 0;
+    font-size: 14px;
+    color: #23282d;
+}
+
+.fds-stat-value {
+    margin: 10px 0 0 0;
+    font-size: 24px;
+    font-weight: 600;
+    color: #2c3338;
+}
+
+.fds-action-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 20px;
 }
 
 /* Logs styles */
 .fds-logs-container {
-    background: #fff;
-    border: 1px solid #ccd0d4;
-    border-radius: 4px;
-    padding: 15px;
+    padding: 0;
 }
 
 .fds-log-filters {
     margin-bottom: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.fds-filter-group, .fds-button-group {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -82,6 +258,7 @@
     overflow-y: auto;
     margin-bottom: 15px;
     border: 1px solid #e5e5e5;
+    border-radius: 4px;
 }
 
 .fds-logs-table {
@@ -94,59 +271,60 @@
     top: 0;
     background: #f9f9f9;
     z-index: 1;
+    border-bottom: 1px solid #e5e5e5;
 }
 
 .fds-logs-table th, 
 .fds-logs-table td {
     text-align: left;
-    padding: 8px;
+    padding: 10px;
     border-bottom: 1px solid #e5e5e5;
 }
 
 .fds-logs-table tr:hover {
-    background-color: #f5f5f5;
+    background-color: #f9f9f9;
 }
 
 .fds-logs-table .log-level {
     text-transform: uppercase;
     font-size: 11px;
     font-weight: bold;
-    padding: 2px 6px;
+    padding: 3px 8px;
     border-radius: 3px;
     white-space: nowrap;
 }
 
 .log-level-emergency, .log-level-alert, .log-level-critical, .log-level-error {
-    background-color: #f8d7da;
-    color: #721c24;
+    background-color: #fcf0f1;
+    color: #d63638;
 }
 
 .log-level-warning {
-    background-color: #fff3cd;
-    color: #856404;
+    background-color: #fcf9e8;
+    color: #dba617;
 }
 
 .log-level-notice, .log-level-info {
-    background-color: #d1ecf1;
-    color: #0c5460;
+    background-color: #f0f6fc;
+    color: #2271b1;
 }
 
 .log-level-debug {
-    background-color: #e2e3e5;
-    color: #383d41;
+    background-color: #f0f0f1;
+    color: #50575e;
 }
 
 .fds-logs-pagination {
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 10px;
+    gap: 15px;
     margin-top: 15px;
 }
 
 .fds-log-details-button {
     cursor: pointer;
-    color: #0073aa;
+    color: #2271b1;
     text-decoration: underline;
 }
 
@@ -158,7 +336,7 @@
     background: white;
     padding: 20px;
     border-radius: 5px;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.3);
     z-index: 1000;
     max-width: 80%;
     max-height: 80%;
@@ -171,7 +349,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.7);
     z-index: 999;
 }
 
@@ -181,6 +359,18 @@
     right: 10px;
     cursor: pointer;
     font-size: 20px;
+    width: 28px;
+    height: 28px;
+    line-height: 26px;
+    text-align: center;
+    border-radius: 50%;
+    background: #f0f0f1;
+    color: #3c434a;
+}
+
+.fds-log-details-close:hover {
+    background: #dcdcde;
+    color: #000;
 }
 
 .fds-log-details-content {
@@ -188,39 +378,91 @@
     overflow: auto;
     font-family: monospace;
     white-space: pre-wrap;
-    background: #f0f0f0;
-    padding: 10px;
+    background: #f0f0f1;
+    padding: 15px;
     border-radius: 4px;
+    margin-top: 15px;
 }
 
 .fds-loading-logs {
     text-align: center;
-    padding: 20px !important;
+    padding: 30px !important;
     font-style: italic;
-    color: #666;
+    color: #646970;
 }
 
 /* Connection status */
 #fds-connection-status {
     margin-top: 10px;
-    padding: 10px;
+    padding: 10px 15px;
     border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
 #fds-connection-status.success {
-    background-color: #d4edda;
-    color: #155724;
-    border: 1px solid #c3e6cb;
+    background-color: #f0fdf0;
+    color: #4ab866;
+    border: 1px solid #4ab866;
 }
 
 #fds-connection-status.error {
-    background-color: #f8d7da;
-    color: #721c24;
-    border: 1px solid #f5c6cb;
+    background-color: #fcf0f1;
+    color: #d63638;
+    border: 1px solid #d63638;
 }
 
 #fds-connection-status.info {
-    background-color: #d1ecf1;
-    color: #0c5460;
-    border: 1px solid #bee5eb;
+    background-color: #f0f6fc;
+    color: #2271b1;
+    border: 1px solid #2271b1;
+}
+
+/* Form field improvements */
+#fds_dropbox_app_key, #fds_dropbox_app_secret, #fds_root_dropbox_folder {
+    width: 400px;
+    max-width: 100%;
+    padding: 8px;
+    border-radius: 4px;
+}
+
+/* Mobile responsiveness */
+@media screen and (max-width: 782px) {
+    .fds-sync-dashboard,
+    .fds-sync-controls,
+    .fds-settings-section {
+        padding: 15px;
+    }
+    
+    .fds-stats-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .fds-action-buttons {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .fds-action-buttons button {
+        width: 100%;
+    }
+    
+    .fds-log-filters {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .fds-filter-group, .fds-button-group {
+        width: 100%;
+    }
+    
+    .fds-code-box {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .fds-code-box button {
+        margin-top: 10px;
+    }
 }

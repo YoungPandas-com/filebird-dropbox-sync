@@ -1,11 +1,16 @@
 /**
  * Admin JavaScript for FileBird Dropbox Sync
+ * 
+ * Enhanced with better user feedback and error handling
  */
 (function($) {
     'use strict';
 
     // Initialize when document is ready
     $(document).ready(function() {
+        // Track if actions are in progress to prevent duplicate submissions
+        let actionInProgress = false;
+        
         // Dropbox connection
         initDropboxConnection();
         
@@ -17,10 +22,13 @@
         
         // Initialize sync dashboard
         initSyncDashboard();
+        
+        // Initialize clipboard functionality
+        initClipboard();
     });
 
     /**
-     * Initialize Dropbox connection functionality
+     * Initialize Dropbox connection functionality with improved user feedback
      */
     function initDropboxConnection() {
         const $connectButton = $('#fds-connect-dropbox');
@@ -29,7 +37,29 @@
         
         if ($connectButton.length) {
             $connectButton.on('click', function() {
-                $statusContainer.removeClass('hidden').addClass('info').text(fds_admin_vars.strings.connecting);
+                // Prevent multiple clicks
+                if (actionInProgress) return;
+                
+                // Check if app key and secret are entered
+                const appKey = $('#fds_dropbox_app_key').val();
+                const appSecret = $('#fds_dropbox_app_secret').val();
+                
+                if (!appKey || !appSecret) {
+                    alert('Please enter your Dropbox App Key and App Secret before connecting.');
+                    $('#fds_dropbox_app_key').focus();
+                    return;
+                }
+                
+                actionInProgress = true;
+                $connectButton.prop('disabled', true);
+                $connectButton.text('Connecting...');
+                
+                // Show status message
+                $statusContainer.removeClass('hidden error success')
+                    .addClass('info')
+                    .html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear;"></span> ' + 
+                          fds_admin_vars.strings.connecting)
+                    .show();
                 
                 $.ajax({
                     url: fds_admin_vars.ajax_url,
@@ -40,16 +70,60 @@
                     },
                     success: function(response) {
                         if (response.success && response.data.auth_url) {
+                            // Show information message to the user
+                            $statusContainer.removeClass('info error')
+                                .addClass('success')
+                                .html('<span class="dashicons dashicons-yes-alt"></span> ' + 
+                                      'Dropbox authorization window opened. Please complete the authorization process in the new tab.')
+                                .show();
+                                
                             // Open Dropbox authorization page in a new window/tab
-                            window.open(response.data.auth_url, '_blank');
+                            const authWindow = window.open(response.data.auth_url, '_blank');
+                            
+                            // Check if popup was blocked
+                            if (!authWindow || authWindow.closed || typeof authWindow.closed === 'undefined') {
+                                $statusContainer.removeClass('info success')
+                                    .addClass('error')
+                                    .html('<span class="dashicons dashicons-warning"></span> ' + 
+                                          'Pop-up blocked! Please allow pop-ups for this site and try again.')
+                                    .show();
+                            } else {
+                                // Inform user to complete authorization
+                                const checkAuthInterval = setInterval(function() {
+                                    if (authWindow.closed) {
+                                        clearInterval(checkAuthInterval);
+                                        
+                                        // Refresh the page after a brief delay to check connection status
+                                        setTimeout(function() {
+                                            window.location.reload();
+                                        }, 2000);
+                                    }
+                                }, 500);
+                            }
                         } else {
-                            $statusContainer.removeClass('info').addClass('error')
-                                .text(fds_admin_vars.strings.error + ' ' + (response.data ? response.data.message : 'Unknown error'));
+                            $statusContainer.removeClass('info success')
+                                .addClass('error')
+                                .html('<span class="dashicons dashicons-warning"></span> ' + 
+                                      fds_admin_vars.strings.error + ' ' + (response.data ? response.data.message : 'Unknown error'))
+                                .show();
                         }
+                        
+                        // Re-enable button
+                        $connectButton.prop('disabled', false);
+                        $connectButton.text('Connect to Dropbox');
+                        actionInProgress = false;
                     },
                     error: function(xhr, status, error) {
-                        $statusContainer.removeClass('info').addClass('error')
-                            .text(fds_admin_vars.strings.error + ' ' + error);
+                        $statusContainer.removeClass('info success')
+                            .addClass('error')
+                            .html('<span class="dashicons dashicons-warning"></span> ' + 
+                                  fds_admin_vars.strings.error + ' ' + error)
+                            .show();
+                        
+                        // Re-enable button
+                        $connectButton.prop('disabled', false);
+                        $connectButton.text('Connect to Dropbox');
+                        actionInProgress = false;
                     }
                 });
             });
@@ -57,8 +131,18 @@
         
         if ($disconnectButton.length) {
             $disconnectButton.on('click', function() {
+                if (actionInProgress) return;
+                
                 if (confirm('Are you sure you want to disconnect from Dropbox? This will stop synchronization until you reconnect.')) {
-                    $statusContainer.removeClass('hidden').addClass('info').text('Disconnecting from Dropbox...');
+                    actionInProgress = true;
+                    $disconnectButton.prop('disabled', true);
+                    $disconnectButton.text('Disconnecting...');
+                    
+                    $statusContainer.removeClass('hidden error success')
+                        .addClass('info')
+                        .html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear;"></span> ' + 
+                              'Disconnecting from Dropbox...')
+                        .show();
                     
                     $.ajax({
                         url: fds_admin_vars.ajax_url,
@@ -69,48 +153,80 @@
                         },
                         success: function(response) {
                             if (response.success) {
-                                $statusContainer.removeClass('info').addClass('success')
-                                    .text('Successfully disconnected from Dropbox.');
+                                $statusContainer.removeClass('info error')
+                                    .addClass('success')
+                                    .html('<span class="dashicons dashicons-yes-alt"></span> ' + 
+                                          'Successfully disconnected from Dropbox.');
                                 
                                 // Reload page after a short delay
                                 setTimeout(function() {
                                     window.location.reload();
                                 }, 1500);
                             } else {
-                                $statusContainer.removeClass('info').addClass('error')
-                                    .text(fds_admin_vars.strings.error + ' ' + (response.data ? response.data.message : 'Unknown error'));
+                                $statusContainer.removeClass('info success')
+                                    .addClass('error')
+                                    .html('<span class="dashicons dashicons-warning"></span> ' + 
+                                          fds_admin_vars.strings.error + ' ' + (response.data ? response.data.message : 'Unknown error'));
+                                
+                                // Re-enable button
+                                $disconnectButton.prop('disabled', false);
+                                $disconnectButton.text('Disconnect from Dropbox');
+                                actionInProgress = false;
                             }
                         },
                         error: function(xhr, status, error) {
-                            $statusContainer.removeClass('info').addClass('error')
-                                .text(fds_admin_vars.strings.error + ' ' + error);
+                            $statusContainer.removeClass('info success')
+                                .addClass('error')
+                                .html('<span class="dashicons dashicons-warning"></span> ' + 
+                                      fds_admin_vars.strings.error + ' ' + error);
+                            
+                            // Re-enable button
+                            $disconnectButton.prop('disabled', false);
+                            $disconnectButton.text('Disconnect from Dropbox');
+                            actionInProgress = false;
                         }
                     });
                 }
             });
         }
-        
-        // Copy webhook URL button
+    }
+
+    /**
+     * Initialize clipboard functionality for copy buttons
+     */
+    function initClipboard() {
         $('.copy-webhook-url').on('click', function() {
             const text = $(this).data('clipboard-text');
+            
+            // Create temporary input element
             const tempInput = $('<input>');
             $('body').append(tempInput);
             tempInput.val(text).select();
-            document.execCommand('copy');
+            
+            // Execute copy command
+            const success = document.execCommand('copy');
             tempInput.remove();
             
             // Change button text temporarily
             const $button = $(this);
             const originalText = $button.text();
-            $button.text('Copied!');
-            setTimeout(function() {
-                $button.text(originalText);
-            }, 2000);
+            
+            if (success) {
+                $button.text('Copied!');
+                setTimeout(function() {
+                    $button.text(originalText);
+                }, 2000);
+            } else {
+                $button.text('Failed to copy');
+                setTimeout(function() {
+                    $button.text(originalText);
+                }, 2000);
+            }
         });
     }
 
     /**
-     * Initialize manual sync functionality
+     * Initialize manual sync functionality with better feedback
      */
     function initManualSync() {
         const $syncButton = $('#fds-manual-sync');
@@ -122,12 +238,18 @@
         
         if ($syncButton.length) {
             $syncButton.on('click', function() {
+                if (actionInProgress) return;
+                
                 if (confirm(fds_admin_vars.strings.confirm_sync)) {
+                    actionInProgress = true;
                     $syncButton.prop('disabled', true);
+                    $syncButton.text('Syncing...');
                     $syncStatus.text(fds_admin_vars.strings.sync_started);
+                    
+                    // Show and reset progress bar
                     $syncProgress.show();
                     $progressBar.css('width', '0%');
-                    $progressStatus.text('Processing...');
+                    $progressStatus.html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear; margin-right: 5px;"></span> Preparing synchronization...');
                     $progressCounts.text('');
                     
                     // Start the sync
@@ -140,16 +262,23 @@
                         },
                         success: function(response) {
                             if (response.success) {
+                                // Update status
+                                $progressStatus.html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear; margin-right: 5px;"></span> Synchronization started');
+                                
                                 // Start polling for updates
                                 checkSyncStatus();
                             } else {
+                                actionInProgress = false;
                                 $syncButton.prop('disabled', false);
+                                $syncButton.text('Start Full Sync');
                                 $syncStatus.text('Error: ' + (response.data ? response.data.message : 'Unknown error'));
                                 $syncProgress.hide();
                             }
                         },
                         error: function(xhr, status, error) {
+                            actionInProgress = false;
                             $syncButton.prop('disabled', false);
+                            $syncButton.text('Start Full Sync');
                             $syncStatus.text('Error: ' + error);
                             $syncProgress.hide();
                         }
@@ -157,7 +286,10 @@
                 }
             });
             
-            // Function to check sync status
+            // Function to check sync status with exponential backoff
+            let checkInterval = 2000; // Start with 2 seconds
+            const maxInterval = 10000; // Max 10 seconds
+            
             function checkSyncStatus() {
                 $.ajax({
                     url: fds_admin_vars.ajax_url,
@@ -175,6 +307,14 @@
                             const completed = parseInt(data.completed) || 0;
                             const failed = parseInt(data.failed) || 0;
                             
+                            // Reset interval if there's activity
+                            if (pending > 0 || processing > 0) {
+                                checkInterval = 2000;
+                            } else {
+                                // Gradually increase interval if no changes
+                                checkInterval = Math.min(checkInterval * 1.5, maxInterval);
+                            }
+                            
                             // Calculate progress percentage
                             let progress = 0;
                             if (total > 0) {
@@ -186,32 +326,50 @@
                             
                             // Update status text
                             if (pending > 0 || processing > 0) {
-                                $progressStatus.text('Synchronizing...');
-                                $progressCounts.text(`Completed: ${completed}, Pending: ${pending + processing}, Failed: ${failed}`);
+                                $progressStatus.html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear; margin-right: 5px;"></span> Synchronizing...');
+                                $progressCounts.html('<strong>' + completed + '</strong> completed, <strong>' + (pending + processing) + '</strong> pending, <strong>' + failed + '</strong> failed');
                                 
                                 // Continue polling
-                                setTimeout(checkSyncStatus, 2000);
+                                setTimeout(checkSyncStatus, checkInterval);
                             } else {
-                                $progressStatus.text('Synchronization completed!');
-                                $progressCounts.text(`Completed: ${completed}, Failed: ${failed}`);
+                                actionInProgress = false;
                                 $syncButton.prop('disabled', false);
+                                $syncButton.text('Start Full Sync');
+                                
+                                if (failed > 0) {
+                                    $progressStatus.html('<span class="dashicons dashicons-warning" style="margin-right: 5px; color: #dba617;"></span> Synchronization completed with errors');
+                                } else {
+                                    $progressStatus.html('<span class="dashicons dashicons-yes-alt" style="margin-right: 5px; color: #4ab866;"></span> Synchronization completed successfully');
+                                }
+                                
+                                $progressCounts.html('<strong>' + completed + '</strong> completed, <strong>' + failed + '</strong> failed');
                                 $syncStatus.text('Sync completed at ' + new Date().toLocaleTimeString());
                                 
                                 // Hide progress after a delay
                                 setTimeout(function() {
-                                    $syncProgress.hide();
-                                }, 5000);
+                                    $syncProgress.fadeOut('slow');
+                                }, 8000);
+                                
+                                // Refresh stats
+                                refreshStats();
                             }
                         } else {
+                            actionInProgress = false;
                             $syncButton.prop('disabled', false);
+                            $syncButton.text('Start Full Sync');
                             $syncStatus.text('Error checking sync status');
                             $syncProgress.hide();
                         }
                     },
                     error: function(xhr, status, error) {
-                        $syncButton.prop('disabled', false);
-                        $syncStatus.text('Error checking sync status: ' + error);
-                        $syncProgress.hide();
+                        // On error, increase check interval but continue polling
+                        checkInterval = Math.min(checkInterval * 2, maxInterval);
+                        
+                        $progressStatus.html('<span class="dashicons dashicons-warning" style="margin-right: 5px;"></span> Checking status...');
+                        $progressCounts.text('Connection issue, retrying...');
+                        
+                        // Continue polling even on error, but with longer interval
+                        setTimeout(checkSyncStatus, checkInterval);
                     }
                 });
             }
@@ -219,7 +377,7 @@
     }
 
     /**
-     * Initialize logs handling
+     * Initialize logs handling with improved UX
      */
     function initLogsHandling() {
         const $logLevelFilter = $('#fds-log-level-filter');
@@ -235,6 +393,7 @@
         let currentPage = 1;
         let totalPages = 1;
         let logsPerPage = 20;
+        let isLoadingLogs = false;
         
         // Load logs if we're on the logs tab
         if ($logsTable.length) {
@@ -247,11 +406,18 @@
             });
             
             $refreshLogsBtn.on('click', function() {
+                if (isLoadingLogs) return;
                 loadLogs();
             });
             
             $clearLogsBtn.on('click', function() {
+                if (isLoadingLogs) return;
+                
                 if (confirm('Are you sure you want to clear all logs? This cannot be undone.')) {
+                    isLoadingLogs = true;
+                    $clearLogsBtn.prop('disabled', true);
+                    $clearLogsBtn.html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear; margin-right: 5px;"></span> Clearing...');
+                    
                     $.ajax({
                         url: fds_admin_vars.ajax_url,
                         type: 'POST',
@@ -260,6 +426,10 @@
                             nonce: fds_admin_vars.nonce
                         },
                         success: function(response) {
+                            isLoadingLogs = false;
+                            $clearLogsBtn.prop('disabled', false);
+                            $clearLogsBtn.html('<span class="dashicons dashicons-trash" style="margin: 4px 5px 0 -5px;"></span> Clear Logs');
+                            
                             if (response.success) {
                                 currentPage = 1;
                                 loadLogs();
@@ -268,6 +438,9 @@
                             }
                         },
                         error: function(xhr, status, error) {
+                            isLoadingLogs = false;
+                            $clearLogsBtn.prop('disabled', false);
+                            $clearLogsBtn.html('<span class="dashicons dashicons-trash" style="margin: 4px 5px 0 -5px;"></span> Clear Logs');
                             alert('Error clearing logs: ' + error);
                         }
                     });
@@ -275,6 +448,8 @@
             });
             
             $prevBtn.on('click', function() {
+                if (isLoadingLogs) return;
+                
                 if (currentPage > 1) {
                     currentPage--;
                     loadLogs();
@@ -282,6 +457,8 @@
             });
             
             $nextBtn.on('click', function() {
+                if (isLoadingLogs) return;
+                
                 if (currentPage < totalPages) {
                     currentPage++;
                     loadLogs();
@@ -289,9 +466,15 @@
             });
         }
         
-        // Function to load logs
+        // Function to load logs with better feedback
         function loadLogs() {
-            $logsBody.html('<tr><td colspan="4" class="fds-loading-logs">Loading logs...</td></tr>');
+            if (isLoadingLogs) return;
+            
+            isLoadingLogs = true;
+            $logsBody.html('<tr><td colspan="4" class="fds-loading-logs"><span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear; margin-right: 5px;"></span> Loading logs...</td></tr>');
+            $refreshLogsBtn.prop('disabled', true);
+            $prevBtn.prop('disabled', true);
+            $nextBtn.prop('disabled', true);
             
             $.ajax({
                 url: fds_admin_vars.ajax_url,
@@ -304,15 +487,19 @@
                     per_page: logsPerPage
                 },
                 success: function(response) {
+                    isLoadingLogs = false;
+                    $refreshLogsBtn.prop('disabled', false);
+                    
                     if (response.success) {
                         const logs = response.data.logs;
                         const total = parseInt(response.data.total) || 0;
                         
                         // Calculate total pages
                         totalPages = Math.ceil(total / logsPerPage);
+                        if (totalPages === 0) totalPages = 1;
                         
                         // Update page info
-                        $pageInfo.text('Page ' + currentPage + ' of ' + (totalPages || 1));
+                        $pageInfo.text('Page ' + currentPage + ' of ' + totalPages);
                         
                         // Update pagination buttons
                         $prevBtn.prop('disabled', currentPage <= 1);
@@ -321,15 +508,17 @@
                         if (logs && logs.length > 0) {
                             renderLogs(logs);
                         } else {
-                            $logsBody.html('<tr><td colspan="4" class="fds-loading-logs">No logs found.</td></tr>');
+                            $logsBody.html('<tr><td colspan="4" class="fds-loading-logs"><span class="dashicons dashicons-info"></span> No logs found matching your criteria.</td></tr>');
                         }
                     } else {
-                        $logsBody.html('<tr><td colspan="4" class="fds-loading-logs">Error loading logs: ' + 
+                        $logsBody.html('<tr><td colspan="4" class="fds-loading-logs"><span class="dashicons dashicons-warning"></span> Error loading logs: ' + 
                             (response.data ? response.data.message : 'Unknown error') + '</td></tr>');
                     }
                 },
                 error: function(xhr, status, error) {
-                    $logsBody.html('<tr><td colspan="4" class="fds-loading-logs">Error loading logs: ' + error + '</td></tr>');
+                    isLoadingLogs = false;
+                    $refreshLogsBtn.prop('disabled', false);
+                    $logsBody.html('<tr><td colspan="4" class="fds-loading-logs"><span class="dashicons dashicons-warning"></span> Error loading logs: ' + error + '</td></tr>');
                 }
             });
         }
@@ -342,9 +531,9 @@
                 let context = '';
                 try {
                     if (log.context) {
-                        const contextData = JSON.parse(log.context);
+                        const contextObj = typeof log.context === 'string' ? JSON.parse(log.context) : log.context;
                         context = '<a href="#" class="fds-log-details-button" data-context=\'' + 
-                            escapeHtml(JSON.stringify(contextData, null, 2)) + '\'>View Details</a>';
+                            escapeHtml(JSON.stringify(contextObj, null, 2)) + '\'>View Details</a>';
                     } else {
                         context = 'N/A';
                     }
@@ -396,41 +585,48 @@
                 $popup.remove();
             }
         }
-        
-        // Helper function to escape HTML
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
     }
 
     /**
-     * Initialize sync stats dashboard
+     * Initialize sync stats dashboard with auto-refresh
      */
     function initSyncDashboard() {
         const $refreshStats = $('#fds-refresh-stats');
         const $forceProcess = $('#fds-force-process');
         const $retryFailed = $('#fds-retry-failed');
         const $actionStatus = $('#fds-action-status');
+        const $totalFiles = $('#fds-total-files');
+        const $syncedFiles = $('#fds-synced-files');
+        const $pendingTasks = $('#fds-pending-tasks');
+        const $failedTasks = $('#fds-failed-tasks');
         
         // Load stats on page load
-        loadSyncStats();
-        
-        // Handle button clicks
         if ($refreshStats.length) {
+            loadSyncStats();
+            
+            // Set up auto-refresh every 30 seconds
+            const autoRefreshInterval = setInterval(function() {
+                if (!actionInProgress) {
+                    refreshStats(false); // Silent refresh
+                }
+            }, 30000);
+            
+            // Handle button clicks
             $refreshStats.on('click', function() {
-                loadSyncStats();
+                refreshStats(true); // Visible feedback
             });
-        }
-        
-        if ($forceProcess.length) {
+            
             $forceProcess.on('click', function() {
-                if (confirm('Are you sure you want to force process pending tasks?')) {
+                if (actionInProgress) return;
+                
+                if (confirm('Are you sure you want to force process pending tasks? This will attempt to process all tasks in the queue immediately.')) {
+                    actionInProgress = true;
                     $forceProcess.prop('disabled', true);
+                    $forceProcess.html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear; margin-right: 5px;"></span> Processing...');
+                    
                     $actionStatus.removeClass('notice-success notice-error')
                         .addClass('notice notice-info')
-                        .html('<p>Processing queue...</p>')
+                        .html('<p><span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear; margin-right: 5px;"></span> Processing queue...</p>')
                         .show();
                     
                     $.ajax({
@@ -441,38 +637,53 @@
                             nonce: fds_admin_vars.nonce
                         },
                         success: function(response) {
+                            actionInProgress = false;
+                            $forceProcess.prop('disabled', false);
+                            $forceProcess.html('<span class="dashicons dashicons-controls-play" style="margin: 4px 5px 0 -5px;"></span> Process Queue Now');
+                            
                             if (response.success) {
                                 $actionStatus.removeClass('notice-info notice-error')
                                     .addClass('notice-success')
-                                    .html('<p>' + response.data.message + '</p>');
+                                    .html('<p><span class="dashicons dashicons-yes-alt"></span> ' + response.data.message + '</p>');
                                     
                                 // Refresh stats after processing
-                                loadSyncStats();
+                                refreshStats(false);
                             } else {
                                 $actionStatus.removeClass('notice-info notice-success')
                                     .addClass('notice-error')
-                                    .html('<p>Error: ' + (response.data ? response.data.message : 'Unknown error') + '</p>');
+                                    .html('<p><span class="dashicons dashicons-warning"></span> Error: ' + (response.data ? response.data.message : 'Unknown error') + '</p>');
                             }
-                            $forceProcess.prop('disabled', false);
                         },
                         error: function(xhr, status, error) {
+                            actionInProgress = false;
+                            $forceProcess.prop('disabled', false);
+                            $forceProcess.html('<span class="dashicons dashicons-controls-play" style="margin: 4px 5px 0 -5px;"></span> Process Queue Now');
+                            
                             $actionStatus.removeClass('notice-info notice-success')
                                 .addClass('notice-error')
-                                .html('<p>Error: ' + error + '</p>');
-                            $forceProcess.prop('disabled', false);
+                                .html('<p><span class="dashicons dashicons-warning"></span> Error: ' + error + '</p>');
                         }
                     });
                 }
             });
-        }
-        
-        if ($retryFailed.length) {
+            
             $retryFailed.on('click', function() {
+                if (actionInProgress) return;
+                
+                const failedCount = parseInt($failedTasks.text());
+                if (failedCount === 0) {
+                    alert('There are no failed tasks to retry.');
+                    return;
+                }
+                
                 if (confirm('Are you sure you want to retry all failed tasks?')) {
+                    actionInProgress = true;
                     $retryFailed.prop('disabled', true);
+                    $retryFailed.html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear; margin-right: 5px;"></span> Retrying...');
+                    
                     $actionStatus.removeClass('notice-success notice-error')
                         .addClass('notice notice-info')
-                        .html('<p>Retrying failed tasks...</p>')
+                        .html('<p><span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear; margin-right: 5px;"></span> Retrying failed tasks...</p>')
                         .show();
                     
                     $.ajax({
@@ -483,32 +694,54 @@
                             nonce: fds_admin_vars.nonce
                         },
                         success: function(response) {
+                            actionInProgress = false;
+                            $retryFailed.prop('disabled', false);
+                            $retryFailed.html('<span class="dashicons dashicons-image-rotate" style="margin: 4px 5px 0 -5px;"></span> Retry Failed Tasks');
+                            
                             if (response.success) {
                                 $actionStatus.removeClass('notice-info notice-error')
                                     .addClass('notice-success')
-                                    .html('<p>' + response.data.message + '</p>');
+                                    .html('<p><span class="dashicons dashicons-yes-alt"></span> ' + response.data.message + '</p>');
                                     
                                 // Refresh stats after retrying
-                                loadSyncStats();
+                                refreshStats(false);
                             } else {
                                 $actionStatus.removeClass('notice-info notice-success')
                                     .addClass('notice-error')
-                                    .html('<p>Error: ' + (response.data ? response.data.message : 'Unknown error') + '</p>');
+                                    .html('<p><span class="dashicons dashicons-warning"></span> Error: ' + (response.data ? response.data.message : 'Unknown error') + '</p>');
                             }
-                            $retryFailed.prop('disabled', false);
                         },
                         error: function(xhr, status, error) {
+                            actionInProgress = false;
+                            $retryFailed.prop('disabled', false);
+                            $retryFailed.html('<span class="dashicons dashicons-image-rotate" style="margin: 4px 5px 0 -5px;"></span> Retry Failed Tasks');
+                            
                             $actionStatus.removeClass('notice-info notice-success')
                                 .addClass('notice-error')
-                                .html('<p>Error: ' + error + '</p>');
-                            $retryFailed.prop('disabled', false);
+                                .html('<p><span class="dashicons dashicons-warning"></span> Error: ' + error + '</p>');
                         }
                     });
                 }
             });
         }
         
-        function loadSyncStats() {
+        // Master function to refresh stats
+        function refreshStats(showFeedback = true) {
+            if (showFeedback) {
+                $refreshStats.prop('disabled', true);
+                $refreshStats.html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear; margin-right: 5px;"></span> Refreshing...');
+            }
+            
+            loadSyncStats(function() {
+                if (showFeedback) {
+                    $refreshStats.prop('disabled', false);
+                    $refreshStats.html('<span class="dashicons dashicons-update" style="margin: 4px 5px 0 -5px;"></span> Refresh Stats');
+                }
+            });
+        }
+        
+        // Function to load sync stats
+        function loadSyncStats(callback) {
             $.ajax({
                 url: fds_admin_vars.ajax_url,
                 type: 'POST',
@@ -520,14 +753,79 @@
                     if (response.success) {
                         const data = response.data;
                         
-                        $('#fds-total-files').text(data.total_files);
-                        $('#fds-synced-files').text(data.synced_files);
-                        $('#fds-pending-tasks').text(data.pending_tasks);
-                        $('#fds-failed-tasks').text(data.failed_tasks);
+                        // Animated counter update
+                        animateCounter($totalFiles, data.total_files);
+                        animateCounter($syncedFiles, data.synced_files);
+                        animateCounter($pendingTasks, data.pending_tasks);
+                        animateCounter($failedTasks, data.failed_tasks);
+                        
+                        // Highlight changed values
+                        highlightChanges($totalFiles, data.total_files);
+                        highlightChanges($syncedFiles, data.synced_files);
+                        highlightChanges($pendingTasks, data.pending_tasks);
+                        highlightChanges($failedTasks, data.failed_tasks);
+                    }
+                    
+                    if (typeof callback === 'function') {
+                        callback();
+                    }
+                },
+                error: function() {
+                    if (typeof callback === 'function') {
+                        callback();
                     }
                 }
             });
         }
+        
+        // Function to animate counter updates
+        function animateCounter($element, newValue) {
+            const currentValue = parseInt($element.text()) || 0;
+            if (isNaN(newValue)) newValue = 0;
+            
+            // Only animate if there's a significant change
+            if (Math.abs(currentValue - newValue) > 5) {
+                $({ counter: currentValue }).animate({ counter: newValue }, {
+                    duration: 500,
+                    easing: 'swing',
+                    step: function() {
+                        $element.text(Math.round(this.counter));
+                    },
+                    complete: function() {
+                        $element.text(newValue);
+                    }
+                });
+            } else {
+                $element.text(newValue);
+            }
+        }
+        
+        // Function to highlight changed values
+        function highlightChanges($element, newValue) {
+            const currentValue = parseInt($element.attr('data-value')) || 0;
+            if (currentValue !== newValue) {
+                $element.attr('data-value', newValue);
+                
+                // Flash highlight
+                $element.css('transition', 'none');
+                $element.css('background-color', newValue > currentValue ? '#d4edda' : (newValue < currentValue ? '#f8d7da' : 'transparent'));
+                setTimeout(function() {
+                    $element.css('transition', 'background-color 1s ease');
+                    $element.css('background-color', 'transparent');
+                }, 50);
+            }
+        }
     }
+
+    // Helper function to escape HTML
+    function escapeHtml(text) {
+        if (typeof text !== 'string') return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Add rotation animation to stylesheet
+    $('<style>@keyframes rotation{from{transform:rotate(0)}to{transform:rotate(360deg)}}</style>').appendTo('head');
 
 })(jQuery);

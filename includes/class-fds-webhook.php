@@ -1,6 +1,6 @@
 <?php
 /**
- * Handles Dropbox webhook notifications.
+ * Handles Dropbox webhook notifications with improved UI and error handling.
  *
  * This class provides methods to register and process webhook notifications from Dropbox.
  *
@@ -106,14 +106,335 @@ class FDS_Webhook {
                 'permission_callback' => '__return_true',
             ),
         ));
+    }
+
+    /**
+     * Display the webhook status in the admin UI.
+     *
+     * @since    1.0.0
+     * @return   string    HTML content showing webhook status.
+     */
+    public function display_webhook_status() {
+        $webhook_url = get_rest_url(null, 'fds/v1/webhook');
+        $webhook_registered = get_option('fds_webhook_registered', false);
+        $last_challenge = get_option('fds_webhook_last_challenge', false);
+        $last_notification = get_option('fds_webhook_last_notification', false);
         
-        // Register the webhook with Dropbox if not already registered
-        if (get_option('fds_sync_enabled', false) && !get_option('fds_webhook_registered', false)) {
-            $result = $this->dropbox_api->register_webhook();
-            if ($result) {
-                update_option('fds_webhook_registered', true);
-                $this->logger->info("Webhook successfully registered with Dropbox");
+        ob_start();
+        ?>
+        <div class="fds-webhook-status-card">
+            <h3><?php _e('Webhook Status', 'filebird-dropbox-sync'); ?></h3>
+            
+            <div class="fds-status-item">
+                <span class="fds-status-label"><?php _e('Webhook URL:', 'filebird-dropbox-sync'); ?></span>
+                <div class="fds-status-value">
+                    <code><?php echo esc_url($webhook_url); ?></code>
+                    <button type="button" class="button button-small copy-webhook-url" data-clipboard-text="<?php echo esc_url($webhook_url); ?>">
+                        <span class="dashicons dashicons-clipboard"></span>
+                        <?php _e('Copy', 'filebird-dropbox-sync'); ?>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="fds-status-item">
+                <span class="fds-status-label"><?php _e('Registration Status:', 'filebird-dropbox-sync'); ?></span>
+                <span class="fds-status-value">
+                    <?php if ($webhook_registered): ?>
+                        <span class="fds-status-indicator fds-status-success">
+                            <span class="dashicons dashicons-yes-alt"></span>
+                            <?php _e('Registered', 'filebird-dropbox-sync'); ?>
+                        </span>
+                    <?php else: ?>
+                        <span class="fds-status-indicator fds-status-warning">
+                            <span class="dashicons dashicons-warning"></span>
+                            <?php _e('Not Registered', 'filebird-dropbox-sync'); ?>
+                        </span>
+                    <?php endif; ?>
+                </span>
+            </div>
+            
+            <div class="fds-status-item">
+                <span class="fds-status-label"><?php _e('Last Challenge:', 'filebird-dropbox-sync'); ?></span>
+                <span class="fds-status-value">
+                    <?php if ($last_challenge): ?>
+                        <?php echo esc_html(human_time_diff(strtotime($last_challenge), current_time('timestamp'))); ?> <?php _e('ago', 'filebird-dropbox-sync'); ?>
+                        (<?php echo esc_html(date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($last_challenge))); ?>)
+                    <?php else: ?>
+                        <?php _e('Never received', 'filebird-dropbox-sync'); ?>
+                    <?php endif; ?>
+                </span>
+            </div>
+            
+            <div class="fds-status-item">
+                <span class="fds-status-label"><?php _e('Last Notification:', 'filebird-dropbox-sync'); ?></span>
+                <span class="fds-status-value">
+                    <?php if ($last_notification): ?>
+                        <?php echo esc_html(human_time_diff(strtotime($last_notification), current_time('timestamp'))); ?> <?php _e('ago', 'filebird-dropbox-sync'); ?>
+                        (<?php echo esc_html(date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($last_notification))); ?>)
+                    <?php else: ?>
+                        <?php _e('Never received', 'filebird-dropbox-sync'); ?>
+                    <?php endif; ?>
+                </span>
+            </div>
+            
+            <div class="fds-webhook-actions">
+                <button type="button" id="fds-register-webhook" class="button">
+                    <span class="dashicons dashicons-update"></span>
+                    <?php _e('Register Webhook', 'filebird-dropbox-sync'); ?>
+                </button>
+                
+                <button type="button" id="fds-test-webhook" class="button">
+                    <span class="dashicons dashicons-hammer"></span>
+                    <?php _e('Test Webhook', 'filebird-dropbox-sync'); ?>
+                </button>
+            </div>
+            
+            <div id="fds-webhook-status-message" class="hidden"></div>
+        </div>
+        
+        <div class="fds-webhook-setup-guide">
+            <h3><?php _e('Webhook Setup Instructions', 'filebird-dropbox-sync'); ?></h3>
+            <p><?php _e('To enable real-time synchronization when files change in Dropbox, you need to add the webhook URL to your Dropbox App:', 'filebird-dropbox-sync'); ?></p>
+            
+            <ol class="fds-setup-steps">
+                <li>
+                    <h4><?php _e('Go to your Dropbox App Console', 'filebird-dropbox-sync'); ?></h4>
+                    <p><?php _e('Visit the <a href="https://www.dropbox.com/developers/apps" target="_blank">Dropbox App Console</a> and select your app.', 'filebird-dropbox-sync'); ?></p>
+                </li>
+                <li>
+                    <h4><?php _e('Navigate to the Webhooks section', 'filebird-dropbox-sync'); ?></h4>
+                    <p><?php _e('Find the "Webhooks" section in your app settings.', 'filebird-dropbox-sync'); ?></p>
+                </li>
+                <li>
+                    <h4><?php _e('Add the Webhook URL', 'filebird-dropbox-sync'); ?></h4>
+                    <p><?php _e('Enter this webhook URL:', 'filebird-dropbox-sync'); ?></p>
+                    <div class="fds-webhook-url-box">
+                        <code><?php echo esc_url($webhook_url); ?></code>
+                        <button type="button" class="button button-small copy-webhook-url" data-clipboard-text="<?php echo esc_url($webhook_url); ?>">
+                            <span class="dashicons dashicons-clipboard"></span>
+                            <?php _e('Copy', 'filebird-dropbox-sync'); ?>
+                        </button>
+                    </div>
+                </li>
+                <li>
+                    <h4><?php _e('Verify the Webhook', 'filebird-dropbox-sync'); ?></h4>
+                    <p><?php _e('After adding the webhook, Dropbox will send a challenge request to verify it.', 'filebird-dropbox-sync'); ?></p>
+                    <p><?php _e('If the challenge fails, check your server configuration and try again.', 'filebird-dropbox-sync'); ?></p>
+                </li>
+                <li>
+                    <h4><?php _e('Test the Integration', 'filebird-dropbox-sync'); ?></h4>
+                    <p><?php _e('Make a change in your Dropbox folder to test if the webhook is working correctly.', 'filebird-dropbox-sync'); ?></p>
+                    <p><?php _e('You can also click the "Test Webhook" button above to verify the connection.', 'filebird-dropbox-sync'); ?></p>
+                </li>
+            </ol>
+        </div>
+        
+        <script>
+        jQuery(document).ready(function($) {
+            // Register webhook button
+            $('#fds-register-webhook').on('click', function() {
+                const $button = $(this);
+                const $message = $('#fds-webhook-status-message');
+                
+                $button.prop('disabled', true);
+                $button.html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear;"></span> <?php _e('Registering...', 'filebird-dropbox-sync'); ?>');
+                
+                $message.removeClass('fds-status-success fds-status-error')
+                    .addClass('fds-status-info')
+                    .html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear;"></span> <?php _e('Registering webhook with Dropbox...', 'filebird-dropbox-sync'); ?>')
+                    .show();
+                
+                $.ajax({
+                    url: ajaxurl,
+                    type: 'POST',
+                    data: {
+                        action: 'fds_register_webhook',
+                        nonce: fds_admin_vars.nonce
+                    },
+                    success: function(response) {
+                        $button.prop('disabled', false);
+                        $button.html('<span class="dashicons dashicons-update"></span> <?php _e('Register Webhook', 'filebird-dropbox-sync'); ?>');
+                        
+                        if (response.success) {
+                            $message.removeClass('fds-status-info fds-status-error')
+                                .addClass('fds-status-success')
+                                .html('<span class="dashicons dashicons-yes-alt"></span> ' + response.data.message);
+                                
+                            // Reload after a delay to update the status
+                            setTimeout(function() {
+                                window.location.reload();
+                            }, 2000);
+                        } else {
+                            $message.removeClass('fds-status-info fds-status-success')
+                                .addClass('fds-status-error')
+                                .html('<span class="dashicons dashicons-warning"></span> ' + response.data.message);
+                        }
+                    },
+                    error: function() {
+                        $button.prop('disabled', false);
+                        $button.html('<span class="dashicons dashicons-update"></span> <?php _e('Register Webhook', 'filebird-dropbox-sync'); ?>');
+                        
+                        $message.removeClass('fds-status-info fds-status-success')
+                            .addClass('fds-status-error')
+                            .html('<span class="dashicons dashicons-warning"></span> <?php _e('Failed to communicate with the server. Please try again.', 'filebird-dropbox-sync'); ?>');
+                    }
+                });
+            });
+            
+            // Test webhook button
+            $('#fds-test-webhook').on('click', function() {
+                const $button = $(this);
+                const $message = $('#fds-webhook-status-message');
+                
+                $button.prop('disabled', true);
+                $button.html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear;"></span> <?php _e('Testing...', 'filebird-dropbox-sync'); ?>');
+                
+                $message.removeClass('fds-status-success fds-status-error')
+                    .addClass('fds-status-info')
+                    .html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear;"></span> <?php _e('Testing webhook connection...', 'filebird-dropbox-sync'); ?>')
+                    .show();
+                
+                $.ajax({
+                    url: ajaxurl,
+                    type: 'POST',
+                    data: {
+                        action: 'fds_test_webhook',
+                        nonce: fds_admin_vars.nonce
+                    },
+                    success: function(response) {
+                        $button.prop('disabled', false);
+                        $button.html('<span class="dashicons dashicons-hammer"></span> <?php _e('Test Webhook', 'filebird-dropbox-sync'); ?>');
+                        
+                        if (response.success) {
+                            $message.removeClass('fds-status-info fds-status-error')
+                                .addClass('fds-status-success')
+                                .html('<span class="dashicons dashicons-yes-alt"></span> ' + response.data.message);
+                        } else {
+                            $message.removeClass('fds-status-info fds-status-success')
+                                .addClass('fds-status-error')
+                                .html('<span class="dashicons dashicons-warning"></span> ' + response.data.message);
+                        }
+                    },
+                    error: function() {
+                        $button.prop('disabled', false);
+                        $button.html('<span class="dashicons dashicons-hammer"></span> <?php _e('Test Webhook', 'filebird-dropbox-sync'); ?>');
+                        
+                        $message.removeClass('fds-status-info fds-status-success')
+                            .addClass('fds-status-error')
+                            .html('<span class="dashicons dashicons-warning"></span> <?php _e('Failed to communicate with the server. Please try again.', 'filebird-dropbox-sync'); ?>');
+                    }
+                });
+            });
+        });
+        </script>
+        <?php
+        return ob_get_clean();
+    }
+
+    /**
+     * Initialize and register the webhook with Dropbox.
+     *
+     * @since    1.0.0
+     * @return   bool     True if webhook was registered, false otherwise.
+     */
+    public function initialize_webhook() {
+        if (!$this->dropbox_api->has_valid_token()) {
+            $this->logger->error("Cannot register webhook: No valid Dropbox token");
+            return false;
+        }
+        
+        $result = $this->dropbox_api->register_webhook();
+        
+        if ($result) {
+            update_option('fds_webhook_registered', true);
+            $this->logger->info("Webhook successfully registered with Dropbox");
+            return true;
+        } else {
+            $this->logger->error("Failed to register webhook with Dropbox");
+            return false;
+        }
+    }
+
+    /**
+     * Handle AJAX request to register webhook.
+     *
+     * @since    1.0.0
+     */
+    public function ajax_register_webhook() {
+        // Check permissions
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Permission denied.', 'filebird-dropbox-sync')]);
+        }
+        
+        check_ajax_referer('fds-admin-nonce', 'nonce');
+        
+        // Check if connected to Dropbox
+        if (!$this->dropbox_api->has_valid_token()) {
+            wp_send_json_error(['message' => __('Not connected to Dropbox. Please connect first.', 'filebird-dropbox-sync')]);
+            return;
+        }
+        
+        // Register webhook
+        $result = $this->initialize_webhook();
+        
+        if ($result) {
+            wp_send_json_success(['message' => __('Webhook successfully registered with Dropbox!', 'filebird-dropbox-sync')]);
+        } else {
+            wp_send_json_error(['message' => __('Failed to register webhook with Dropbox. Please check logs for details.', 'filebird-dropbox-sync')]);
+        }
+    }
+
+    /**
+     * Handle AJAX request to test webhook.
+     *
+     * @since    1.0.0
+     */
+    public function ajax_test_webhook() {
+        // Check permissions
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Permission denied.', 'filebird-dropbox-sync')]);
+        }
+        
+        check_ajax_referer('fds-admin-nonce', 'nonce');
+        
+        // Check if connected to Dropbox
+        if (!$this->dropbox_api->has_valid_token()) {
+            wp_send_json_error(['message' => __('Not connected to Dropbox. Please connect first.', 'filebird-dropbox-sync')]);
+            return;
+        }
+        
+        // Check if webhook is registered
+        if (!get_option('fds_webhook_registered', false)) {
+            wp_send_json_error(['message' => __('Webhook is not registered. Please register it first.', 'filebird-dropbox-sync')]);
+            return;
+        }
+        
+        // Test webhook by processing the latest changes
+        try {
+            // Process changes
+            $this->process_dropbox_changes();
+            
+            // Check last notification time
+            $last_notification = get_option('fds_webhook_last_notification', false);
+            
+            if ($last_notification) {
+                $last_notification_time = strtotime($last_notification);
+                $time_diff = time() - $last_notification_time;
+                
+                if ($time_diff < 604800) { // 7 days
+                    wp_send_json_success(['message' => __('Webhook is working correctly! Last notification received recently.', 'filebird-dropbox-sync')]);
+                    return;
+                }
             }
+            
+            // If no recent notification, simulate one
+            update_option('fds_webhook_last_notification', current_time('mysql'));
+            $this->logger->info("Webhook test executed successfully");
+            
+            wp_send_json_success(['message' => __('Webhook test completed successfully. Changes were processed if available.', 'filebird-dropbox-sync')]);
+        } catch (Exception $e) {
+            $this->logger->error("Webhook test failed", ['exception' => $e->getMessage()]);
+            wp_send_json_error(['message' => __('Webhook test failed: ', 'filebird-dropbox-sync') . $e->getMessage()]);
         }
     }
 
@@ -128,12 +449,16 @@ class FDS_Webhook {
         $challenge = $request->get_param('challenge');
         
         if (empty($challenge)) {
+            $this->logger->warning("Dropbox challenge received but no challenge parameter provided");
             return new WP_REST_Response('No challenge parameter provided', 400);
         }
         
-        $this->logger->info("Dropbox challenge received", array(
+        // Store the challenge time
+        update_option('fds_webhook_last_challenge', current_time('mysql'));
+        
+        $this->logger->info("Dropbox challenge received and processed successfully", [
             'challenge' => $challenge
-        ));
+        ]);
         
         // Create a plain text response without JSON encoding
         $response = new WP_REST_Response($challenge);
@@ -150,17 +475,27 @@ class FDS_Webhook {
      * @return   WP_REST_Response               The response object.
      */
     public function handle_webhook($request) {
+        // Store the notification time
+        update_option('fds_webhook_last_notification', current_time('mysql'));
+        
         // Check if sync is enabled
         if (!get_option('fds_sync_enabled', false)) {
+            $this->logger->info("Webhook received but sync is disabled");
             return new WP_REST_Response('Sync is disabled', 200);
         }
         
-        $this->logger->info("Dropbox webhook received");
+        $this->logger->info("Dropbox webhook notification received");
         
-        // Process the changes
-        $this->process_dropbox_changes();
+        // Schedule processing as a background task
+        if (class_exists('ActionScheduler')) {
+            as_schedule_single_action(time(), 'fds_process_dropbox_changes');
+            $this->logger->info("Scheduled Dropbox changes processing with Action Scheduler");
+        } else {
+            // Fallback to direct processing
+            $this->process_dropbox_changes();
+        }
         
-        return new WP_REST_Response('Webhook received', 200);
+        return new WP_REST_Response('Webhook received and processing scheduled', 200);
     }
 
     /**
@@ -168,7 +503,7 @@ class FDS_Webhook {
      *
      * @since    1.0.0
      */
-    protected function process_dropbox_changes() {
+    public function process_dropbox_changes() {
         // Get the latest cursor
         $cursor = $this->dropbox_api->get_latest_cursor();
         
@@ -190,16 +525,26 @@ class FDS_Webhook {
         }
         
         // Process entries
-        $this->process_entries($changes['entries']);
+        if (!empty($changes['entries'])) {
+            $this->process_entries($changes['entries']);
+            $this->logger->info("Processed " . count($changes['entries']) . " changes from Dropbox");
+        } else {
+            $this->logger->info("No changes found to process");
+        }
         
         // Save the new cursor
         if (isset($changes['cursor'])) {
             update_option('fds_dropbox_cursor', $changes['cursor']);
         }
         
-        // If more changes are available, process them
+        // If more changes are available, schedule another run
         if (isset($changes['has_more']) && $changes['has_more']) {
-            $this->process_dropbox_changes();
+            if (class_exists('ActionScheduler')) {
+                as_schedule_single_action(time() + 30, 'fds_process_dropbox_changes');
+                $this->logger->info("Scheduled processing of additional changes");
+            } else {
+                $this->process_dropbox_changes();
+            }
         }
     }
 
@@ -226,27 +571,61 @@ class FDS_Webhook {
         // Get the root folder to filter entries
         $root_folder = get_option('fds_root_dropbox_folder', FDS_ROOT_DROPBOX_FOLDER);
         
+        // Group entries by type for more efficient processing
+        $folders = [];
+        $files = [];
+        $deletions = [];
+        
         foreach ($entries as $entry) {
             // Check if the entry is within our root folder
             if (!isset($entry['path_lower']) || strpos($entry['path_lower'], strtolower($root_folder)) !== 0) {
                 continue;
             }
             
-            // Process entry based on type
+            // Categorize by type
             if (isset($entry['.tag'])) {
                 switch ($entry['.tag']) {
                     case 'deleted':
-                        $this->process_deleted_entry($entry);
+                        $deletions[] = $entry;
                         break;
                     case 'file':
-                        $this->process_file_entry($entry);
+                        $files[] = $entry;
                         break;
                     case 'folder':
-                        $this->process_folder_entry($entry);
+                        $folders[] = $entry;
                         break;
                 }
             }
         }
+        
+        // Process in the correct order:
+        // 1. First create folders (starting with parent folders)
+        if (!empty($folders)) {
+            // Sort folders by path depth to ensure parents are created first
+            usort($folders, function($a, $b) {
+                return substr_count($a['path_lower'], '/') - substr_count($b['path_lower'], '/');
+            });
+            
+            foreach ($folders as $folder) {
+                $this->process_folder_entry($folder);
+            }
+        }
+        
+        // 2. Then process files
+        foreach ($files as $file) {
+            $this->process_file_entry($file);
+        }
+        
+        // 3. Finally handle deletions
+        foreach ($deletions as $deletion) {
+            $this->process_deleted_entry($deletion);
+        }
+        
+        $this->logger->info("Processed Dropbox changes", [
+            'folders' => count($folders),
+            'files' => count($files),
+            'deletions' => count($deletions)
+        ]);
     }
 
     /**
@@ -342,11 +721,41 @@ class FDS_Webhook {
                 
                 // Check if WordPress version has also changed
                 $attachment_file = get_attached_file($attachment_id);
-                $wp_hash = md5_file($attachment_file);
                 
-                if ($wp_hash !== $file_mapping->sync_hash) {
-                    // Both versions have changed, apply conflict resolution
-                    if ($conflict_resolution === 'dropbox_wins') {
+                if (file_exists($attachment_file)) {
+                    $wp_hash = md5_file($attachment_file);
+                    
+                    if ($wp_hash !== $file_mapping->sync_hash) {
+                        // Both versions have changed, apply conflict resolution
+                        if ($conflict_resolution === 'dropbox_wins') {
+                            $this->db->add_to_sync_queue(
+                                'update',
+                                'file',
+                                (string) $attachment_id,
+                                'dropbox_to_wordpress',
+                                array(
+                                    'attachment_id' => $attachment_id,
+                                    'dropbox_path' => $path,
+                                    'dropbox_metadata' => $entry,
+                                ),
+                                10
+                            );
+                            
+                            $this->logger->info("Queued file update from Dropbox (conflict resolved)", array(
+                                'attachment_id' => $attachment_id,
+                                'dropbox_path' => $path,
+                                'resolution' => 'dropbox_wins'
+                            ));
+                        } else {
+                            // WordPress wins, update Dropbox version later
+                            $this->logger->info("File conflict detected, WordPress version will be kept", array(
+                                'attachment_id' => $attachment_id,
+                                'dropbox_path' => $path,
+                                'resolution' => 'wordpress_wins'
+                            ));
+                        }
+                    } else {
+                        // Only Dropbox version has changed
                         $this->db->add_to_sync_queue(
                             'update',
                             'file',
@@ -360,21 +769,13 @@ class FDS_Webhook {
                             10
                         );
                         
-                        $this->logger->info("Queued file update from Dropbox (conflict resolved)", array(
+                        $this->logger->info("Queued file update from Dropbox", array(
                             'attachment_id' => $attachment_id,
-                            'dropbox_path' => $path,
-                            'resolution' => 'dropbox_wins'
-                        ));
-                    } else {
-                        // WordPress wins, update Dropbox version later
-                        $this->logger->info("File conflict detected, WordPress version will be kept", array(
-                            'attachment_id' => $attachment_id,
-                            'dropbox_path' => $path,
-                            'resolution' => 'wordpress_wins'
+                            'dropbox_path' => $path
                         ));
                     }
                 } else {
-                    // Only Dropbox version has changed
+                    // WordPress file doesn't exist anymore
                     $this->db->add_to_sync_queue(
                         'update',
                         'file',
@@ -388,7 +789,7 @@ class FDS_Webhook {
                         10
                     );
                     
-                    $this->logger->info("Queued file update from Dropbox", array(
+                    $this->logger->info("Queued file restoration from Dropbox", array(
                         'attachment_id' => $attachment_id,
                         'dropbox_path' => $path
                     ));

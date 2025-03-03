@@ -1288,11 +1288,13 @@ class FDS_Dropbox_API {
     
     /**
      * Handle AJAX for OAuth start.
+     * 
+     * @since    1.0.0
      */
     public function ajax_oauth_start() {
         check_ajax_referer('fds-admin-nonce', 'nonce');
         
-        if (!current_user_can('manage_fds_settings')) {
+        if (!current_user_can('manage_options')) { // Changed from 'manage_fds_settings' to 'manage_options'
             wp_send_json_error(['message' => __('Permission denied.', 'filebird-dropbox-sync')]);
         }
         
@@ -1304,7 +1306,7 @@ class FDS_Dropbox_API {
         $app_key = get_option('fds_dropbox_app_key', '');
         
         if (empty($app_key)) {
-            wp_send_json_error(['message' => __('Dropbox App Key is not configured.', 'filebird-dropbox-sync')]);
+            wp_send_json_error(['message' => __('Dropbox App Key is not configured. Please enter your App Key in the settings before connecting.', 'filebird-dropbox-sync')]);
         }
         
         // Prepare redirect URL
@@ -1321,9 +1323,11 @@ class FDS_Dropbox_API {
         
         wp_send_json_success(['auth_url' => $auth_url]);
     }
-    
+
     /**
      * Handle AJAX for OAuth finish.
+     * 
+     * @since    1.0.0
      */
     public function ajax_oauth_finish() {
         // Verify CSRF
@@ -1356,11 +1360,13 @@ class FDS_Dropbox_API {
                 'client_secret' => $app_secret,
                 'redirect_uri' => $redirect_url,
             ],
-            'timeout' => 15,
+            'timeout' => 30, // Increase timeout
         ]);
         
         if (is_wp_error($response)) {
-            wp_redirect(admin_url('admin.php?page=filebird-dropbox-sync-settings&tab=dropbox&error=request&message=' . urlencode($response->get_error_message())));
+            $error_message = $response->get_error_message();
+            error_log('FileBird Dropbox Sync - OAuth error: ' . $error_message);
+            wp_redirect(admin_url('admin.php?page=filebird-dropbox-sync-settings&tab=dropbox&error=request&message=' . urlencode($error_message)));
             exit;
         }
         
@@ -1369,6 +1375,7 @@ class FDS_Dropbox_API {
         
         if (empty($data) || isset($data['error'])) {
             $error_msg = isset($data['error_description']) ? $data['error_description'] : 'Unknown error';
+            error_log('FileBird Dropbox Sync - OAuth token error: ' . $error_msg);
             wp_redirect(admin_url('admin.php?page=filebird-dropbox-sync-settings&tab=dropbox&error=api&message=' . urlencode($error_msg)));
             exit;
         }
@@ -1385,8 +1392,8 @@ class FDS_Dropbox_API {
                 update_option('fds_dropbox_token_expiry', time() + $data['expires_in']);
             }
             
-            // Register webhook
-            $this->register_webhook();
+            // Don't register webhook immediately, it might fail
+            // Let's just redirect and show success message
             
             // Clear CSRF token
             delete_option('fds_oauth_csrf_token');
