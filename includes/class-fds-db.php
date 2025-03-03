@@ -1,6 +1,6 @@
 <?php
 /**
- * Handles database operations for the plugin.
+ * Handles database operations for the plugin with improved error handling.
  *
  * This class provides methods to interact with the plugin's database tables.
  *
@@ -9,25 +9,105 @@
 class FDS_DB {
 
     /**
+     * Required database tables.
+     *
+     * @since    1.0.0
+     * @access   protected
+     * @var      array    $required_tables    List of required tables.
+     */
+    protected $required_tables = array();
+
+    /**
      * Initialize the class.
      *
      * @since    1.0.0
      */
     public function __construct() {
-        // Nothing to initialize
+        global $wpdb;
+        
+        // Define required tables
+        $this->required_tables = array(
+            'folder_mapping' => $wpdb->prefix . 'fds_folder_mapping',
+            'file_mapping' => $wpdb->prefix . 'fds_file_mapping',
+            'sync_queue' => $wpdb->prefix . 'fds_sync_queue',
+            'logs' => $wpdb->prefix . 'fds_logs',
+            'cache' => $wpdb->prefix . 'fds_cache'
+        );
     }
 
     /**
-     * Get folder mapping by FileBird folder ID.
+     * Check if a specific table exists.
+     *
+     * @since    1.0.0
+     * @param    string    $table_key    The table key from $required_tables.
+     * @return   boolean                True if table exists, false otherwise.
+     */
+    public function table_exists($table_key) {
+        if (!isset($this->required_tables[$table_key])) {
+            return false;
+        }
+
+        global $wpdb;
+        $table_name = $this->required_tables[$table_key];
+        
+        $result = $wpdb->get_var("SHOW TABLES LIKE '$table_name'");
+        return ($result === $table_name);
+    }
+
+    /**
+     * Check if all required tables exist.
+     *
+     * @since    1.0.0
+     * @return   boolean    True if all tables exist, false otherwise.
+     */
+    public function all_tables_exist() {
+        foreach (array_keys($this->required_tables) as $table_key) {
+            if (!$this->table_exists($table_key)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Create required tables if they don't exist.
+     *
+     * @since    1.0.0
+     * @return   boolean    True on success, false on failure.
+     */
+    public function create_tables_if_needed() {
+        if ($this->all_tables_exist()) {
+            return true;
+        }
+
+        // Include the activator class to create tables
+        require_once FDS_PLUGIN_DIR . 'includes/class-fds-activator.php';
+        
+        // Run the activation function to create tables
+        FDS_Activator::activate();
+        
+        // Verify tables were created
+        return $this->all_tables_exist();
+    }
+
+    /**
+     * Get folder mapping by FileBird folder ID with table existence check.
      *
      * @since    1.0.0
      * @param    int       $folder_id    The FileBird folder ID.
      * @return   object|null             The folder mapping or null if not found.
      */
     public function get_folder_mapping_by_folder_id($folder_id) {
+        if (!$this->table_exists('folder_mapping')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('folder_mapping')) {
+                return null;
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_folder_mapping';
+        $table_name = $this->required_tables['folder_mapping'];
         
         return $wpdb->get_row(
             $wpdb->prepare(
@@ -45,9 +125,16 @@ class FDS_DB {
      * @return   object|null                The folder mapping or null if not found.
      */
     public function get_folder_mapping_by_dropbox_path($dropbox_path) {
+        if (!$this->table_exists('folder_mapping')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('folder_mapping')) {
+                return null;
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_folder_mapping';
+        $table_name = $this->required_tables['folder_mapping'];
         
         return $wpdb->get_row(
             $wpdb->prepare(
@@ -67,9 +154,16 @@ class FDS_DB {
      * @return   int|false                  The number of rows affected or false on error.
      */
     public function add_or_update_folder_mapping($folder_id, $dropbox_path, $sync_hash) {
+        if (!$this->table_exists('folder_mapping')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('folder_mapping')) {
+                return false;
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_folder_mapping';
+        $table_name = $this->required_tables['folder_mapping'];
         $existing = $this->get_folder_mapping_by_folder_id($folder_id);
         
         $data = array(
@@ -104,9 +198,13 @@ class FDS_DB {
      * @return   int|false               The number of rows affected or false on error.
      */
     public function delete_folder_mapping_by_folder_id($folder_id) {
+        if (!$this->table_exists('folder_mapping')) {
+            return false;
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_folder_mapping';
+        $table_name = $this->required_tables['folder_mapping'];
         
         return $wpdb->delete(
             $table_name,
@@ -123,9 +221,13 @@ class FDS_DB {
      * @return   int|false                  The number of rows affected or false on error.
      */
     public function delete_folder_mapping_by_dropbox_path($dropbox_path) {
+        if (!$this->table_exists('folder_mapping')) {
+            return false;
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_folder_mapping';
+        $table_name = $this->required_tables['folder_mapping'];
         
         return $wpdb->delete(
             $table_name,
@@ -141,9 +243,16 @@ class FDS_DB {
      * @return   array    The folder mappings.
      */
     public function get_all_folder_mappings() {
+        if (!$this->table_exists('folder_mapping')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('folder_mapping')) {
+                return array();
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_folder_mapping';
+        $table_name = $this->required_tables['folder_mapping'];
         
         return $wpdb->get_results("SELECT * FROM $table_name ORDER BY filebird_folder_id ASC");
     }
@@ -156,9 +265,16 @@ class FDS_DB {
      * @return   object|null                 The file mapping or null if not found.
      */
     public function get_file_mapping_by_attachment_id($attachment_id) {
+        if (!$this->table_exists('file_mapping')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('file_mapping')) {
+                return null;
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_file_mapping';
+        $table_name = $this->required_tables['file_mapping'];
         
         return $wpdb->get_row(
             $wpdb->prepare(
@@ -176,9 +292,16 @@ class FDS_DB {
      * @return   object|null                   The file mapping or null if not found.
      */
     public function get_file_mapping_by_dropbox_file_id($dropbox_file_id) {
+        if (!$this->table_exists('file_mapping')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('file_mapping')) {
+                return null;
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_file_mapping';
+        $table_name = $this->required_tables['file_mapping'];
         
         return $wpdb->get_row(
             $wpdb->prepare(
@@ -196,9 +319,16 @@ class FDS_DB {
      * @return   object|null                The file mapping or null if not found.
      */
     public function get_file_mapping_by_dropbox_path($dropbox_path) {
+        if (!$this->table_exists('file_mapping')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('file_mapping')) {
+                return null;
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_file_mapping';
+        $table_name = $this->required_tables['file_mapping'];
         
         return $wpdb->get_row(
             $wpdb->prepare(
@@ -219,9 +349,16 @@ class FDS_DB {
      * @return   int|false                    The number of rows affected or false on error.
      */
     public function add_or_update_file_mapping($attachment_id, $dropbox_path, $dropbox_file_id, $sync_hash) {
+        if (!$this->table_exists('file_mapping')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('file_mapping')) {
+                return false;
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_file_mapping';
+        $table_name = $this->required_tables['file_mapping'];
         $existing = $this->get_file_mapping_by_attachment_id($attachment_id);
         
         $data = array(
@@ -257,13 +394,20 @@ class FDS_DB {
      * @return   int|false             The number of rows affected or false on error.
      */
     public function batch_update_file_mappings($mappings) {
+        if (!$this->table_exists('file_mapping')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('file_mapping')) {
+                return false;
+            }
+        }
+
         global $wpdb;
         
         if (empty($mappings)) {
             return 0;
         }
         
-        $table_name = $wpdb->prefix . 'fds_file_mapping';
+        $table_name = $this->required_tables['file_mapping'];
         $rows_affected = 0;
         
         // Start transaction
@@ -326,9 +470,13 @@ class FDS_DB {
      * @return   int|false                   The number of rows affected or false on error.
      */
     public function delete_file_mapping_by_attachment_id($attachment_id) {
+        if (!$this->table_exists('file_mapping')) {
+            return false;
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_file_mapping';
+        $table_name = $this->required_tables['file_mapping'];
         
         return $wpdb->delete(
             $table_name,
@@ -345,9 +493,13 @@ class FDS_DB {
      * @return   int|false                     The number of rows affected or false on error.
      */
     public function delete_file_mapping_by_dropbox_file_id($dropbox_file_id) {
+        if (!$this->table_exists('file_mapping')) {
+            return false;
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_file_mapping';
+        $table_name = $this->required_tables['file_mapping'];
         
         return $wpdb->delete(
             $table_name,
@@ -363,9 +515,16 @@ class FDS_DB {
      * @return   array    The file mappings.
      */
     public function get_all_file_mappings() {
+        if (!$this->table_exists('file_mapping')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('file_mapping')) {
+                return array();
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_file_mapping';
+        $table_name = $this->required_tables['file_mapping'];
         
         return $wpdb->get_results("SELECT * FROM $table_name ORDER BY attachment_id ASC");
     }
@@ -383,9 +542,16 @@ class FDS_DB {
      * @return   int|false               The task ID or false on error.
      */
     public function add_to_sync_queue($action, $item_type, $item_id, $direction, $data = array(), $priority = 10) {
+        if (!$this->table_exists('sync_queue')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('sync_queue')) {
+                return false;
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_sync_queue';
+        $table_name = $this->required_tables['sync_queue'];
         
         // Check if a similar task already exists and is pending
         $existing = $wpdb->get_row(
@@ -444,9 +610,16 @@ class FDS_DB {
      * @return   array               The pending tasks.
      */
     public function get_pending_tasks($limit = 10) {
+        if (!$this->table_exists('sync_queue')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('sync_queue')) {
+                return array();
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_sync_queue';
+        $table_name = $this->required_tables['sync_queue'];
         $max_retries = get_option('fds_max_retries', 3);
         
         return $wpdb->get_results(
@@ -468,9 +641,13 @@ class FDS_DB {
      * @return   int|false                 The number of rows affected or false on error.
      */
     public function update_task_status($task_id, $status, $error_message = '') {
+        if (!$this->table_exists('sync_queue')) {
+            return false;
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_sync_queue';
+        $table_name = $this->required_tables['sync_queue'];
         
         $data = array(
             'status' => $status,
@@ -507,9 +684,13 @@ class FDS_DB {
      * @return   int|false          The number of rows affected or false on error.
      */
     public function cleanup_completed_tasks($days = 7) {
+        if (!$this->table_exists('sync_queue')) {
+            return false;
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_sync_queue';
+        $table_name = $this->required_tables['sync_queue'];
         
         return $wpdb->query(
             $wpdb->prepare(
@@ -529,9 +710,18 @@ class FDS_DB {
      * @return   int|false            The log ID or false on error.
      */
     public function add_log($level, $message, $context = array()) {
+        if (!$this->table_exists('logs')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('logs')) {
+                // If we still can't create the log table, fall back to error_log
+                error_log(sprintf('[FileBird Dropbox Sync] [%s] %s', strtoupper($level), $message));
+                return false;
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_logs';
+        $table_name = $this->required_tables['logs'];
         
         return $wpdb->insert(
             $table_name,
@@ -555,9 +745,16 @@ class FDS_DB {
      * @return   array               The logs.
      */
     public function get_logs($level = '', $limit = 100, $offset = 0) {
+        if (!$this->table_exists('logs')) {
+            $this->create_tables_if_needed();
+            if (!$this->table_exists('logs')) {
+                return array();
+            }
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_logs';
+        $table_name = $this->required_tables['logs'];
         
         $sql = "SELECT * FROM $table_name";
         $args = array();
@@ -586,9 +783,13 @@ class FDS_DB {
      * @return   int|false          The number of rows affected or false on error.
      */
     public function cleanup_logs($days = 30) {
+        if (!$this->table_exists('logs')) {
+            return false;
+        }
+
         global $wpdb;
         
-        $table_name = $wpdb->prefix . 'fds_logs';
+        $table_name = $this->required_tables['logs'];
         
         return $wpdb->query(
             $wpdb->prepare(
@@ -605,6 +806,13 @@ class FDS_DB {
      * @return   array|false    Summary of operations performed or false on error.
      */
     public function perform_maintenance() {
+        if (!$this->all_tables_exist()) {
+            $this->create_tables_if_needed();
+            if (!$this->all_tables_exist()) {
+                return false;
+            }
+        }
+
         global $wpdb;
         
         // Start transaction
@@ -615,7 +823,7 @@ class FDS_DB {
             $completed_deleted = $this->cleanup_completed_tasks(3);
             
             // Clean up failed tasks older than 7 days
-            $table_name = $wpdb->prefix . 'fds_sync_queue';
+            $table_name = $this->required_tables['sync_queue'];
             $failed_deleted = $wpdb->query(
                 $wpdb->prepare(
                     "DELETE FROM $table_name WHERE status = 'failed' AND updated_at < DATE_SUB(NOW(), INTERVAL %d DAY)",
@@ -627,21 +835,13 @@ class FDS_DB {
             $logs_deleted = $this->cleanup_logs(30);
             
             // Clean up cache
-            $cache_table = $wpdb->prefix . 'fds_cache';
+            $cache_table = $this->required_tables['cache'];
             $cache_deleted = $wpdb->query(
                 "DELETE FROM $cache_table WHERE expires_at < NOW()"
             );
             
             // Optimize tables
-            $tables = [
-                $wpdb->prefix . 'fds_folder_mapping',
-                $wpdb->prefix . 'fds_file_mapping',
-                $wpdb->prefix . 'fds_sync_queue',
-                $wpdb->prefix . 'fds_logs',
-                $wpdb->prefix . 'fds_cache'
-            ];
-            
-            foreach ($tables as $table) {
+            foreach ($this->required_tables as $table) {
                 $wpdb->query("OPTIMIZE TABLE $table");
             }
             

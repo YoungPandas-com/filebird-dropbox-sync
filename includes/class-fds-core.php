@@ -38,13 +38,76 @@ class FDS_Core {
     protected $dropbox_api;
 
     /**
-    * The performance instance.
-    *
-    * @since    1.0.0
-    * @access   protected
-    * @var      FDS_Performance $performance performance optimization class
-    */
+     * The database instance.
+     *
+     * @since    1.0.0
+     * @access   protected
+     * @var      FDS_DB    $db    Database operations.
+     */
+    protected $db;
+
+    /**
+     * The logger instance.
+     *
+     * @since    1.0.0
+     * @access   protected
+     * @var      FDS_Logger    $logger    Logger for operations.
+     */
+    protected $logger;
+
+    /**
+     * The folder sync instance.
+     *
+     * @since    1.0.0
+     * @access   protected
+     * @var      FDS_Folder_Sync    $folder_sync    Folder synchronization.
+     */
+    protected $folder_sync;
+
+    /**
+     * The file sync instance.
+     *
+     * @since    1.0.0
+     * @access   protected
+     * @var      FDS_File_Sync    $file_sync    File synchronization.
+     */
+    protected $file_sync;
+
+    /**
+     * The queue instance.
+     *
+     * @since    1.0.0
+     * @access   protected
+     * @var      FDS_Queue    $queue    Queue system.
+     */
+    protected $queue;
+
+    /**
+     * The webhook instance.
+     *
+     * @since    1.0.0
+     * @access   protected
+     * @var      FDS_Webhook    $webhook    Webhook handler.
+     */
+    protected $webhook;
+
+    /**
+     * The performance instance.
+     *
+     * @since    1.0.0
+     * @access   protected
+     * @var      FDS_Performance    $performance    Performance optimization.
+     */
     protected $performance;
+
+    /**
+     * The REST controller instance.
+     *
+     * @since    1.0.0
+     * @access   protected
+     * @var      FDS_REST_Controller    $rest_controller    REST API controller.
+     */
+    protected $rest_controller;
 
     /**
      * Define the core functionality of the plugin.
@@ -59,7 +122,6 @@ class FDS_Core {
         $this->load_dependencies();
         $this->set_locale();
         $this->initialize_components();
-        $this->initialize_action_scheduler(); // Add this line to call the method
         $this->define_admin_hooks();
         $this->define_sync_hooks();
         
@@ -134,6 +196,11 @@ class FDS_Core {
          */
         require_once FDS_PLUGIN_DIR . 'includes/class-fds-performance.php';
 
+        /**
+         * The class responsible for REST API controllers
+         */
+        require_once FDS_PLUGIN_DIR . 'includes/class-fds-rest-controller.php';
+
         $this->loader = new FDS_Loader();
     }
 
@@ -158,32 +225,42 @@ class FDS_Core {
      * @access   private
      */
     private function initialize_components() {
-        // Initialize settings
-        $this->settings = new FDS_Settings();
-        
-        // Initialize Dropbox API
-        $this->dropbox_api = new FDS_Dropbox_API($this->settings);
-        
-        // Initialize database class
+        // Start with the basic components that don't have dependencies
         $this->db = new FDS_DB();
-        
-        // Initialize logger
         $this->logger = new FDS_Logger();
         
-        // Initialize folder sync
+        // Initialize settings with the logger
+        $this->settings = new FDS_Settings($this->logger);
+        
+        // Initialize Dropbox API with settings and logger
+        $this->dropbox_api = new FDS_Dropbox_API($this->settings, $this->logger);
+        
+        // Initialize folder sync with its dependencies
         $this->folder_sync = new FDS_Folder_Sync($this->dropbox_api, $this->db, $this->logger);
         
-        // Initialize file sync
+        // Initialize file sync with its dependencies
         $this->file_sync = new FDS_File_Sync($this->dropbox_api, $this->db, $this->logger);
         
-        // Initialize queue system
+        // Initialize queue system with its dependencies
         $this->queue = new FDS_Queue($this->folder_sync, $this->file_sync, $this->logger);
         
-        // Initialize webhook handler
+        // Initialize webhook handler with its dependencies
         $this->webhook = new FDS_Webhook($this->queue, $this->dropbox_api, $this->settings, $this->logger);
         
-        // Initialize performance optimization
+        // Set the webhook reference in settings
+        $this->settings->set_webhook($this->webhook);
+        
+        // Initialize REST controller with its dependencies
+        $this->rest_controller = new FDS_REST_Controller($this->db, $this->logger, $this->queue);
+        
+        // Set the REST controller reference in settings
+        $this->settings->set_rest_controller($this->rest_controller);
+        
+        // Initialize performance optimization with its dependencies
         $this->performance = new FDS_Performance($this->db, $this->logger);
+        
+        // Initialize Action Scheduler integration
+        $this->initialize_action_scheduler();
     }
 
     /**
@@ -194,19 +271,7 @@ class FDS_Core {
      * @access   private
      */
     private function define_admin_hooks() {
-        // Settings page hooks
-        $this->loader->add_action('admin_menu', $this->settings, 'add_settings_page');
-        $this->loader->add_action('admin_init', $this->settings, 'register_settings');
-        $this->loader->add_action('admin_enqueue_scripts', $this->settings, 'enqueue_styles');
-        $this->loader->add_action('admin_enqueue_scripts', $this->settings, 'enqueue_scripts');
-        
-        // AJAX hooks for OAuth flow
-        $this->loader->add_action('wp_ajax_fds_oauth_start', $this->dropbox_api, 'ajax_oauth_start');
-        $this->loader->add_action('wp_ajax_fds_oauth_finish', $this->dropbox_api, 'ajax_oauth_finish');
-        
-        // AJAX hooks for manual sync
-        $this->loader->add_action('wp_ajax_fds_manual_sync', $this->queue, 'ajax_manual_sync');
-        $this->loader->add_action('wp_ajax_fds_check_sync_status', $this->queue, 'ajax_check_sync_status');
+        // The hooks are already defined in each component's constructor
     }
 
     /**
@@ -235,18 +300,40 @@ class FDS_Core {
         // WP-Cron hook for queue processing
         $this->loader->add_action('fds_process_queue', $this->queue, 'process_queued_items');
         
-        // WP-Cron hook for delta sync, worker queue processing and database optimization
-        $this->loader->add_action('fds_process_queue_worker', $this->queue, 'process_worker_queue', 10, 2);
-        $this->loader->add_action('fds_continue_delta_sync', $this->performance, 'delta_sync', 10, 2);
-        $this->loader->add_action('fds_weekly_maintenance', $this->performance, 'optimize_database_tables');
-
-        // Schedule cron events
-        if (!wp_next_scheduled('fds_process_queue')) {
-            wp_schedule_event(time(), 'one_minute', 'fds_process_queue');
-        }
-        
         // Register custom cron schedules
         $this->loader->add_filter('cron_schedules', $this, 'add_cron_schedules');
+    }
+
+    /**
+     * Initialize Action Scheduler for background processing.
+     *
+     * @return bool True if Action Scheduler is available and initialized, false otherwise.
+     */
+    public function initialize_action_scheduler() {
+        // Check if Action Scheduler is available
+        if (!class_exists('ActionScheduler')) {
+            // Schedule regular cron events instead
+            if (!wp_next_scheduled('fds_process_queue')) {
+                wp_schedule_event(time(), 'one_minute', 'fds_process_queue');
+            }
+            return false;
+        }
+        
+        // Register our hook for processing queue items
+        add_action('fds_process_queue_worker', array($this->queue, 'process_worker_queue'), 10, 2);
+        
+        // Register our hook for delta sync
+        add_action('fds_continue_delta_sync', array($this->performance, 'delta_sync'), 10, 2);
+        
+        // Register our hook for weekly maintenance
+        add_action('fds_weekly_maintenance', array($this->performance, 'optimize_database_tables'));
+        
+        // Setup parallel processing if the method exists
+        if (method_exists($this->performance, 'setup_parallel_processing')) {
+            $this->performance->setup_parallel_processing();
+        }
+        
+        return true;
     }
 
     /**
@@ -265,43 +352,6 @@ class FDS_Core {
     }
 
     /**
-     * Initialize Action Scheduler for background processing.
-     *
-     * @return bool True if Action Scheduler is available and initialized, false otherwise.
-     */
-    public function initialize_action_scheduler() {
-        // Check if Action Scheduler is available
-        if (!class_exists('ActionScheduler')) {
-            return false;
-        }
-        
-        // Make sure all required components exist before registering hooks
-        if (!isset($this->queue) || !isset($this->performance)) {
-            return false;
-        }
-        
-        // Register our hook for processing queue items
-        add_action('fds_process_queue_worker', array($this->queue, 'process_worker_queue'), 10, 2);
-        
-        // Register our hook for delta sync
-        add_action('fds_continue_delta_sync', array($this->performance, 'delta_sync'), 10, 2);
-        
-        // Register our hook for weekly maintenance
-        add_action('fds_weekly_maintenance', array($this->performance, 'optimize_database_tables'));
-        
-        // Setup parallel processing if the method exists
-        if (method_exists($this->performance, 'setup_parallel_processing')) {
-            $this->performance->setup_parallel_processing();
-        }
-        
-        if (isset($this->logger)) {
-            $this->logger->info("Action Scheduler hooks registered successfully");
-        }
-        
-        return true;
-    }
-
-    /**
      * Check for post-activation tasks
      */
     public function check_post_activation_tasks() {
@@ -310,7 +360,7 @@ class FDS_Core {
             delete_option('fds_run_full_sync_after_activation');
             
             // Make sure all components are initialized
-            if ($this->queue && $this->logger) {
+            if (isset($this->queue) && isset($this->logger)) {
                 $this->logger->info("Running full sync after activation");
                 $this->queue->start_full_sync();
             }
@@ -324,8 +374,5 @@ class FDS_Core {
      */
     public function run() {
         $this->loader->run();
-        
-        // Check for post-activation tasks
-        add_action('init', array($this, 'check_post_activation_tasks'), 20);
     }
 }

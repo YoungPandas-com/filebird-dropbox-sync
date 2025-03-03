@@ -27,14 +27,27 @@ class FDS_REST_Controller {
     protected $logger;
 
     /**
+     * The queue instance.
+     *
+     * @since    1.0.0
+     * @access   protected
+     * @var      FDS_Queue    $queue    The queue instance.
+     */
+    protected $queue;
+
+    /**
      * Initialize the class.
      *
      * @since    1.0.0
+     * @param    FDS_DB      $db      The database instance (optional).
+     * @param    FDS_Logger  $logger  The logger instance (optional).
+     * @param    FDS_Queue   $queue   The queue instance (optional).
      */
-    public function __construct() {
+    public function __construct($db = null, $logger = null, $queue = null) {
         // Initialize properties safely
-        $this->db = new FDS_DB();
-        $this->logger = new FDS_Logger();
+        $this->db = $db ?: new FDS_DB();
+        $this->logger = $logger ?: new FDS_Logger();
+        $this->queue = $queue;
         
         // Register REST endpoints
         add_action('rest_api_init', array($this, 'register_rest_routes'));
@@ -47,6 +60,16 @@ class FDS_REST_Controller {
         add_action('wp_ajax_fds_force_process_queue', array($this, 'ajax_force_process_queue'));
         add_action('wp_ajax_fds_retry_failed_tasks', array($this, 'ajax_retry_failed_tasks'));
         add_action('wp_ajax_fds_dismiss_welcome_notice', array($this, 'ajax_dismiss_welcome_notice'));
+    }
+
+    /**
+     * Set the queue instance.
+     *
+     * @since    1.0.0
+     * @param    FDS_Queue    $queue    The queue instance.
+     */
+    public function set_queue($queue) {
+        $this->queue = $queue;
     }
 
     /**
@@ -231,12 +254,8 @@ class FDS_REST_Controller {
      * @return   WP_REST_Response               The response object.
      */
     public function rest_force_process_queue($request) {
-        // Initialize queue
-        $queue = new FDS_Queue(
-            new FDS_Folder_Sync(new FDS_Dropbox_API(new FDS_Settings()), new FDS_DB(), new FDS_Logger()),
-            new FDS_File_Sync(new FDS_Dropbox_API(new FDS_Settings()), new FDS_DB(), new FDS_Logger()),
-            new FDS_Logger()
-        );
+        // Get queue instance
+        $queue = $this->get_queue_instance();
         
         // Process queue
         $processed = $queue->force_process_queue();
@@ -477,12 +496,8 @@ class FDS_REST_Controller {
         
         check_ajax_referer('fds-admin-nonce', 'nonce');
         
-        // Initialize queue
-        $queue = new FDS_Queue(
-            new FDS_Folder_Sync(new FDS_Dropbox_API(new FDS_Settings()), new FDS_DB(), new FDS_Logger()),
-            new FDS_File_Sync(new FDS_Dropbox_API(new FDS_Settings()), new FDS_DB(), new FDS_Logger()),
-            new FDS_Logger()
-        );
+        // Get queue instance
+        $queue = $this->get_queue_instance();
         
         // Process queue
         $processed = $queue->force_process_queue();
@@ -537,5 +552,26 @@ class FDS_REST_Controller {
         check_ajax_referer('fds-dismiss-welcome', 'nonce');
         update_option('fds_welcome_notice_dismissed', true);
         wp_send_json_success();
+    }
+
+    /**
+     * Get queue instance, creating it if necessary.
+     * 
+     * @since    1.0.0
+     * @return   FDS_Queue    The queue instance.
+     */
+    private function get_queue_instance() {
+        if ($this->queue === null) {
+            // Get dependencies from service locator or create them
+            $settings = new FDS_Settings();
+            $dropbox_api = new FDS_Dropbox_API($settings);
+            
+            $folder_sync = new FDS_Folder_Sync($dropbox_api, $this->db, $this->logger);
+            $file_sync = new FDS_File_Sync($dropbox_api, $this->db, $this->logger);
+            
+            $this->queue = new FDS_Queue($folder_sync, $file_sync, $this->logger);
+        }
+        
+        return $this->queue;
     }
 }

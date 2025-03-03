@@ -45,13 +45,23 @@ class FDS_Dropbox_API {
     /**
      * Constructor with enhanced initialization.
      *
-     * @param FDS_Settings $settings Settings instance.
-     * @param FDS_Logger $logger Logger instance.
+     * @param mixed $settings Settings instance or null.
+     * @param mixed $logger Logger instance or null.
      */
-    public function __construct($settings, $logger = null) {
+    public function __construct($settings = null, $logger = null) {
+        // Handle the case where settings might be null during activation
         $this->settings = $settings;
         $this->logger = $logger ?: new FDS_Logger();
         $this->request_window_start = time();
+    }
+    
+    /**
+     * Set the settings instance.
+     *
+     * @param FDS_Settings $settings Settings instance.
+     */
+    public function set_settings($settings) {
+        $this->settings = $settings;
     }
     
     /**

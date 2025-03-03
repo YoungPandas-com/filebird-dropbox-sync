@@ -9,10 +9,17 @@
 class FDS_Activator {
 
     /**
-     * Create optimized database tables and indexes.
+     * Create optimized database tables and indexes with improved error handling.
      */
     public static function activate() {
         global $wpdb;
+        
+        // Check FileBird dependency
+        if (!class_exists('FileBird\\Model\\Folder')) {
+            // Log the missing dependency
+            self::log_activation_error('FileBird plugin is not active. Please install and activate FileBird first.');
+            return;
+        }
         
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
         
@@ -40,6 +47,11 @@ class FDS_Activator {
         ) $charset_collate;";
         
         dbDelta($sql);
+        
+        // Check if table was created
+        if (!self::table_exists($table_name)) {
+            self::log_activation_error("Failed to create table: $table_name");
+        }
         
         // Create files mapping table with optimized structure for large datasets
         $table_name = $wpdb->prefix . 'fds_file_mapping';
@@ -71,6 +83,11 @@ class FDS_Activator {
         
         dbDelta($sql);
         
+        // Check if table was created
+        if (!self::table_exists($table_name)) {
+            self::log_activation_error("Failed to create table: $table_name");
+        }
+        
         // Create sync queue table with partitioning by status for better query performance
         $table_name = $wpdb->prefix . 'fds_sync_queue';
         
@@ -100,6 +117,11 @@ class FDS_Activator {
         
         dbDelta($sql);
         
+        // Check if table was created
+        if (!self::table_exists($table_name)) {
+            self::log_activation_error("Failed to create table: $table_name");
+        }
+        
         // Create logs table with partitioning by level and date
         $table_name = $wpdb->prefix . 'fds_logs';
         
@@ -118,6 +140,11 @@ class FDS_Activator {
         
         dbDelta($sql);
         
+        // Check if table was created
+        if (!self::table_exists($table_name)) {
+            self::log_activation_error("Failed to create table: $table_name");
+        }
+        
         // Create a cache table for frequently accessed data
         $table_name = $wpdb->prefix . 'fds_cache';
         
@@ -131,6 +158,11 @@ class FDS_Activator {
         ) $charset_collate;";
         
         dbDelta($sql);
+        
+        // Check if table was created
+        if (!self::table_exists($table_name)) {
+            self::log_activation_error("Failed to create table: $table_name");
+        }
         
         // Create a sync status table for monitoring and recovery
         $table_name = $wpdb->prefix . 'fds_sync_status';
@@ -151,6 +183,11 @@ class FDS_Activator {
         ) $charset_collate;";
         
         dbDelta($sql);
+        
+        // Check if table was created
+        if (!self::table_exists($table_name)) {
+            self::log_activation_error("Failed to create table: $table_name");
+        }
         
         // Add custom capabilities
         $admin = get_role('administrator');
@@ -197,9 +234,80 @@ class FDS_Activator {
             file_put_contents($index_file, $index_content);
         }
         
-        // Instead of trying to directly run a sync, just set a flag to run it later
-        if (get_option('fds_sync_enabled', false)) {
-            update_option('fds_run_full_sync_after_activation', true);
+        // Check for Action Scheduler
+        self::check_for_action_scheduler();
+        
+        // Store a flag that we've completed activation
+        update_option('fds_activated', time());
+        
+        // Log activation success
+        self::log_activation_message('FileBird Dropbox Sync plugin activated successfully');
+    }
+    
+    /**
+     * Check if Action Scheduler is available and log appropriate message.
+     */
+    private static function check_for_action_scheduler() {
+        if (!class_exists('ActionScheduler')) {
+            // Log that Action Scheduler is not available - plugin will use WP-Cron instead
+            self::log_activation_message('Action Scheduler not available. Using WP-Cron for background processing, which may be less reliable for large media libraries.');
+            
+            // Store option for graceful degradation
+            update_option('fds_use_action_scheduler', false);
+        } else {
+            // Action Scheduler is available
+            self::log_activation_message('Action Scheduler detected. Using optimized background processing for better performance.');
+            
+            // Store option to use Action Scheduler
+            update_option('fds_use_action_scheduler', true);
         }
+    }
+    
+    /**
+     * Check if a table exists.
+     * 
+     * @param string $table_name Full table name.
+     * @return bool True if table exists, false otherwise.
+     */
+    private static function table_exists($table_name) {
+        global $wpdb;
+        $result = $wpdb->get_var("SHOW TABLES LIKE '$table_name'");
+        return $result === $table_name;
+    }
+    
+    /**
+     * Log an activation error.
+     * 
+     * @param string $message Error message.
+     */
+    private static function log_activation_error($message) {
+        // Write to WP error log
+        error_log('[FileBird Dropbox Sync] Activation Error: ' . $message);
+        
+        // Store in plugin's own option for admin notices
+        $errors = get_option('fds_activation_errors', array());
+        $errors[] = array(
+            'message' => $message,
+            'time' => current_time('mysql')
+        );
+        update_option('fds_activation_errors', $errors);
+    }
+    
+    /**
+     * Log an activation message.
+     * 
+     * @param string $message Information message.
+     */
+    private static function log_activation_message($message) {
+        // Write to WP error log
+        error_log('[FileBird Dropbox Sync] Activation: ' . $message);
+        
+        // Store in plugin's own option for admin notices
+        $messages = get_option('fds_activation_messages', array());
+        $messages[] = array(
+            'message' => $message,
+            'time' => current_time('mysql')
+        );
+        update_option('fds_activation_messages', $messages);
     }
 }

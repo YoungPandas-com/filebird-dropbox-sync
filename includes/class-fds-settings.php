@@ -39,8 +39,9 @@ class FDS_Settings {
      * Initialize the class and set its properties.
      *
      * @since    1.0.0
+     * @param    FDS_Logger    $logger    The logger instance (optional).
      */
-    public function __construct() {
+    public function __construct($logger = null) {
         // Add hooks for admin styles and scripts
         add_action('admin_enqueue_scripts', array($this, 'enqueue_styles'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
@@ -52,31 +53,38 @@ class FDS_Settings {
         // Add hooks for custom CSS and form elements
         add_action('admin_head', array($this, 'add_settings_css'));
         
-        // Initialize the logger
-        $this->logger = new FDS_Logger();
+        // Initialize or set the logger
+        $this->logger = $logger ?: new FDS_Logger();
+    }
+
+    /**
+     * Set the REST controller instance.
+     *
+     * @since    1.0.0
+     * @param    FDS_REST_Controller    $rest_controller    The REST controller instance.
+     */
+    public function set_rest_controller($rest_controller) {
+        $this->rest_controller = $rest_controller;
+    }
+
+    /**
+     * Set the webhook instance.
+     *
+     * @since    1.0.0
+     * @param    FDS_Webhook    $webhook    The webhook instance.
+     */
+    public function set_webhook($webhook) {
+        $this->webhook = $webhook;
         
-        // Add REST API controller for AJAX operations
-        $this->rest_controller = new FDS_REST_Controller();
-        
-        // Initialize webhook handler
-        $this->webhook = new FDS_Webhook(
-            new FDS_Queue(
-                new FDS_Folder_Sync(new FDS_Dropbox_API($this), new FDS_DB(), $this->logger),
-                new FDS_File_Sync(new FDS_Dropbox_API($this), new FDS_DB(), $this->logger),
-                $this->logger
-            ),
-            new FDS_Dropbox_API($this),
-            $this,
-            $this->logger
-        );
-        
-        // Add AJAX handlers for webhook functionality
-        add_action('wp_ajax_fds_register_webhook', array($this->webhook, 'ajax_register_webhook'));
-        add_action('wp_ajax_fds_test_webhook', array($this->webhook, 'ajax_test_webhook'));
-        add_action('wp_ajax_fds_dismiss_welcome_notice', array($this, 'ajax_dismiss_welcome_notice'));
-        
-        // Add action hook for processing Dropbox changes
-        add_action('fds_process_dropbox_changes', array($this->webhook, 'process_dropbox_changes'));
+        // Set up webhook AJAX handlers - Do this here to avoid circular dependencies
+        if ($this->webhook) {
+            add_action('wp_ajax_fds_register_webhook', array($this->webhook, 'ajax_register_webhook'));
+            add_action('wp_ajax_fds_test_webhook', array($this->webhook, 'ajax_test_webhook'));
+            add_action('wp_ajax_fds_dismiss_welcome_notice', array($this, 'ajax_dismiss_welcome_notice'));
+            
+            // Add action hook for processing Dropbox changes
+            add_action('fds_process_dropbox_changes', array($this->webhook, 'process_dropbox_changes'));
+        }
     }
 
     /**

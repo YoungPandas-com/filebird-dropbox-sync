@@ -36,15 +36,50 @@ class FDS_Logger {
     );
 
     /**
+     * Flag to indicate if database logging is initialized.
+     * 
+     * @since    1.0.0
+     * @access   protected
+     * @var      boolean    $db_initialized    Whether database logging is initialized.
+     */
+    protected $db_initialized = false;
+
+    /**
      * Initialize the class.
      *
      * @since    1.0.0
+     * @param    FDS_DB    $db    The database instance (optional).
      */
-    public function __construct() {
-        global $wpdb;
-        
-        // Initialize database connection
-        $this->db = new FDS_DB();
+    public function __construct($db = null) {
+        // Store the database instance if provided
+        if ($db) {
+            $this->db = $db;
+            $this->db_initialized = true;
+        }
+        // We'll initialize the DB later if needed, to avoid circular dependencies
+    }
+
+    /**
+     * Set the database instance.
+     *
+     * @since    1.0.0
+     * @param    FDS_DB    $db    The database instance.
+     */
+    public function set_db($db) {
+        $this->db = $db;
+        $this->db_initialized = true;
+    }
+
+    /**
+     * Ensure database is initialized for logging.
+     *
+     * @since    1.0.0
+     */
+    protected function ensure_db_initialized() {
+        if (!$this->db_initialized) {
+            $this->db = new FDS_DB();
+            $this->db_initialized = true;
+        }
     }
 
     /**
@@ -183,8 +218,22 @@ class FDS_Logger {
             $message = sprintf('%s: %s in %s:%s', get_class($message), $message->getMessage(), $message->getFile(), $message->getLine());
         }
         
-        // Add to database logs
-        $this->db->add_log($level, $message, $context);
+        // Add to database logs if DB is available
+        if ($this->db_initialized) {
+            try {
+                $this->db->add_log($level, $message, $context);
+            } catch (Exception $e) {
+                // Fallback to PHP error log if DB logging fails
+                error_log(sprintf('[FileBird Dropbox Sync] [%s] %s - DB logging failed: %s', 
+                    strtoupper($level), 
+                    $message, 
+                    $e->getMessage()
+                ));
+            }
+        } else {
+            // Always log to PHP error log during initialization
+            error_log(sprintf('[FileBird Dropbox Sync] [%s] %s', strtoupper($level), $message));
+        }
         
         // For emergency/critical/errors, also log to PHP error log
         if (in_array($level, array('emergency', 'alert', 'critical', 'error'))) {
@@ -192,7 +241,7 @@ class FDS_Logger {
         }
         
         // Cleanup old logs occasionally (randomly to avoid doing it on every request)
-        if (mt_rand(1, 1000) === 1) {
+        if ($this->db_initialized && mt_rand(1, 1000) === 1) {
             $this->cleanup_logs();
         }
     }
@@ -207,6 +256,7 @@ class FDS_Logger {
      * @return   array                The logs.
      */
     public function get_logs($level = '', $limit = 100, $offset = 0) {
+        $this->ensure_db_initialized();
         return $this->db->get_logs($level, $limit, $offset);
     }
 
@@ -217,6 +267,7 @@ class FDS_Logger {
      * @param    int    $days    The number of days to keep logs.
      */
     public function cleanup_logs($days = 30) {
+        $this->ensure_db_initialized();
         $this->db->cleanup_logs($days);
     }
 }
