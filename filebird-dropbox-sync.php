@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name: FileBird Dropbox Sync
- * Plugin URI: https://example.com/filebird-dropbox-sync
+ * Plugin URI: https://yp.studio/filebird-dropbox-sync
  * Description: Enables robust, two-way synchronization between FileBird folders and Dropbox.
  * Version: 1.0.0
  * Author: YP Studio
