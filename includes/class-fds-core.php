@@ -250,6 +250,14 @@ class FDS_Core {
         // Set the webhook reference in settings
         $this->settings->set_webhook($this->webhook);
         
+        // Make sure webhook AJAX handlers are registered
+        add_action('wp_ajax_fds_register_webhook', array($this->webhook, 'ajax_register_webhook'));
+        add_action('wp_ajax_fds_test_webhook', array($this->webhook, 'ajax_test_webhook'));
+
+        // Register OAuth AJAX handlers
+        add_action('wp_ajax_fds_oauth_start', array($this->dropbox_api, 'ajax_oauth_start'));
+        add_action('wp_ajax_fds_oauth_finish', array($this->dropbox_api, 'ajax_oauth_finish'));
+        
         // Initialize REST controller with its dependencies
         $this->rest_controller = new FDS_REST_Controller($this->db, $this->logger, $this->queue);
         

@@ -25,6 +25,9 @@
         
         // Initialize clipboard functionality
         initClipboard();
+        
+        // Initialize webhook buttons
+        initWebhookButtons();
     });
 
     /**
@@ -191,39 +194,78 @@
         }
     }
 
-    /**
-     * Initialize clipboard functionality for copy buttons
-     */
-    function initClipboard() {
-        $('.copy-webhook-url').on('click', function() {
-            const text = $(this).data('clipboard-text');
-            
-            // Create temporary input element
-            const tempInput = $('<input>');
-            $('body').append(tempInput);
-            tempInput.val(text).select();
-            
-            // Execute copy command
-            const success = document.execCommand('copy');
-            tempInput.remove();
-            
-            // Change button text temporarily
-            const $button = $(this);
-            const originalText = $button.text();
-            
-            if (success) {
-                $button.text('Copied!');
-                setTimeout(function() {
-                    $button.text(originalText);
-                }, 2000);
-            } else {
-                $button.text('Failed to copy');
-                setTimeout(function() {
-                    $button.text(originalText);
-                }, 2000);
-            }
-        });
+/**
+ * Initialize clipboard functionality for copy buttons
+ */
+function initClipboard() {
+    $('.copy-webhook-url').on('click', function(e) {
+        e.preventDefault();
+        
+        const text = $(this).data('clipboard-text');
+        if (!text) {
+            console.error('No text to copy');
+            return;
+        }
+        
+        // Use the modern Clipboard API if available
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text)
+                .then(() => {
+                    const $button = $(this);
+                    const originalText = $button.text();
+                    $button.text('Copied!');
+                    setTimeout(function() {
+                        $button.text(originalText);
+                    }, 2000);
+                })
+                .catch(err => {
+                    console.error('Failed to copy: ', err);
+                    fallbackCopyTextToClipboard(text, this);
+                });
+        } else {
+            // Fallback for older browsers
+            fallbackCopyTextToClipboard(text, this);
+        }
+    });
+    
+    // Fallback copy method using temporary input element
+    function fallbackCopyTextToClipboard(text, buttonElement) {
+        const $button = $(buttonElement);
+        const originalText = $button.text();
+        
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        
+        // Make the textarea out of viewport
+        textArea.style.position = "fixed";
+        textArea.style.left = "-999999px";
+        textArea.style.top = "-999999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        let successful = false;
+        try {
+            successful = document.execCommand('copy');
+        } catch (err) {
+            console.error('Fallback: Oops, unable to copy', err);
+        }
+        
+        document.body.removeChild(textArea);
+        
+        if (successful) {
+            $button.text('Copied!');
+            setTimeout(function() {
+                $button.text(originalText);
+            }, 2000);
+        } else {
+            $button.text('Copy failed');
+            setTimeout(function() {
+                $button.text(originalText);
+            }, 2000);
+        }
     }
+}
 
     /**
      * Initialize manual sync functionality with better feedback
@@ -815,6 +857,129 @@
                 }, 50);
             }
         }
+    }
+
+    /**
+     * Initialize webhook button functionality
+     */
+    function initWebhookButtons() {
+        console.log('Initializing webhook buttons'); // Debug message
+        
+        // Register webhook button
+        $('#fds-register-webhook').on('click', function() {
+            console.log('Register webhook button clicked'); // Debug message
+            const $button = $(this);
+            const $message = $('#fds-webhook-status-message');
+            
+            // Prevent multiple clicks
+            if ($button.prop('disabled')) {
+                return;
+            }
+            
+            $button.prop('disabled', true);
+            $button.html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear;"></span> Registering...');
+            
+            $message.removeClass('fds-status-success fds-status-error')
+                .addClass('fds-status-info')
+                .html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear;"></span> Registering webhook with Dropbox...')
+                .show();
+            
+            $.ajax({
+                url: ajaxurl,
+                type: 'POST',
+                data: {
+                    action: 'fds_register_webhook',
+                    nonce: fds_admin_vars.nonce
+                },
+                success: function(response) {
+                    console.log('Register webhook response:', response); // Debug message
+                    $button.prop('disabled', false);
+                    $button.html('<span class="dashicons dashicons-update"></span> Register Webhook');
+                    
+                    if (response.success) {
+                        $message.removeClass('fds-status-info fds-status-error')
+                            .addClass('fds-status-success')
+                            .html('<span class="dashicons dashicons-yes-alt"></span> ' + response.data.message);
+                            
+                        // Reload after a delay to update the status
+                        setTimeout(function() {
+                            window.location.reload();
+                        }, 2000);
+                    } else {
+                        $message.removeClass('fds-status-info fds-status-success')
+                            .addClass('fds-status-error')
+                            .html('<span class="dashicons dashicons-warning"></span> ' + (response.data ? response.data.message : 'Unknown error'));
+                    }
+                },
+                error: function(xhr, status, error) {
+                    console.error('Register webhook error:', error, xhr.responseText); // Debug message
+                    $button.prop('disabled', false);
+                    $button.html('<span class="dashicons dashicons-update"></span> Register Webhook');
+                    
+                    $message.removeClass('fds-status-info fds-status-success')
+                        .addClass('fds-status-error')
+                        .html('<span class="dashicons dashicons-warning"></span> Failed to communicate with the server. Please try again.');
+                }
+            });
+        });
+        
+        // Test webhook button
+        $('#fds-test-webhook').on('click', function() {
+            console.log('Test webhook button clicked'); // Debug message
+            const $button = $(this);
+            const $message = $('#fds-webhook-status-message');
+            
+            // Prevent multiple clicks
+            if ($button.prop('disabled')) {
+                return;
+            }
+            
+            $button.prop('disabled', true);
+            $button.html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear;"></span> Testing...');
+            
+            $message.removeClass('fds-status-success fds-status-error')
+                .addClass('fds-status-info')
+                .html('<span class="dashicons dashicons-update" style="animation: rotation 2s infinite linear;"></span> Testing webhook connection...')
+                .show();
+            
+            $.ajax({
+                url: ajaxurl,
+                type: 'POST',
+                data: {
+                    action: 'fds_test_webhook',
+                    nonce: fds_admin_vars.nonce
+                },
+                success: function(response) {
+                    console.log('Test webhook response:', response); // Debug message
+                    $button.prop('disabled', false);
+                    $button.html('<span class="dashicons dashicons-hammer"></span> Test Webhook');
+                    
+                    if (response.success) {
+                        $message.removeClass('fds-status-info fds-status-error')
+                            .addClass('fds-status-success')
+                            .html('<span class="dashicons dashicons-yes-alt"></span> ' + response.data.message);
+                            
+                        // Reload after a delay to update the status
+                        setTimeout(function() {
+                            window.location.reload();
+                        }, 2000);
+                    } else {
+                        $message.removeClass('fds-status-info fds-status-success')
+                            .addClass('fds-status-error')
+                            .html('<span class="dashicons dashicons-warning"></span> ' + (response.data ? response.data.message : 'Unknown error'));
+                    }
+                },
+                error: function(xhr, status, error) {
+                    console.error('Test webhook error:', error, xhr.responseText); // Debug message
+                    $button.prop('disabled', false);
+                    $button.html('<span class="dashicons dashicons-hammer"></span> Test Webhook');
+                    
+                    $message.removeClass('fds-status-info fds-status-success')
+                        .addClass('fds-status-error')
+                        .html('<span class="dashicons dashicons-warning"></span> Failed to communicate with the server. Please try again.');
+                }
+            });
+        });
     }
 
     // Helper function to escape HTML
