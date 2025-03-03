@@ -82,6 +82,48 @@
                             </div>
                         </div>
                     </div>
+                    
+                    <div class="fds-sync-dashboard" style="margin-top: 20px; background: #fff; border: 1px solid #ccd0d4; border-radius: 4px; padding: 15px;">
+                        <h3><?php _e('Sync Status Dashboard', 'filebird-dropbox-sync'); ?></h3>
+                        
+                        <div class="fds-stats-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
+                            <div class="fds-stat-card" style="background: #f0f8ff; padding: 15px; border-radius: 4px; border-left: 4px solid #2271b1;">
+                                <h4><?php _e('Total Files', 'filebird-dropbox-sync'); ?></h4>
+                                <p class="fds-stat-value" id="fds-total-files">-</p>
+                            </div>
+                            
+                            <div class="fds-stat-card" style="background: #f0fff0; padding: 15px; border-radius: 4px; border-left: 4px solid #46b450;">
+                                <h4><?php _e('Synced Files', 'filebird-dropbox-sync'); ?></h4>
+                                <p class="fds-stat-value" id="fds-synced-files">-</p>
+                            </div>
+                            
+                            <div class="fds-stat-card" style="background: #fff8e5; padding: 15px; border-radius: 4px; border-left: 4px solid #ffb900;">
+                                <h4><?php _e('Pending Tasks', 'filebird-dropbox-sync'); ?></h4>
+                                <p class="fds-stat-value" id="fds-pending-tasks">-</p>
+                            </div>
+                            
+                            <div class="fds-stat-card" style="background: #fef7f7; padding: 15px; border-radius: 4px; border-left: 4px solid #dc3232;">
+                                <h4><?php _e('Failed Tasks', 'filebird-dropbox-sync'); ?></h4>
+                                <p class="fds-stat-value" id="fds-failed-tasks">-</p>
+                            </div>
+                        </div>
+                        
+                        <div class="fds-action-buttons" style="margin-top: 20px;">
+                            <button type="button" id="fds-refresh-stats" class="button button-secondary">
+                                <?php _e('Refresh Stats', 'filebird-dropbox-sync'); ?>
+                            </button>
+                            
+                            <button type="button" id="fds-force-process" class="button button-secondary">
+                                <?php _e('Force Process Queue', 'filebird-dropbox-sync'); ?>
+                            </button>
+                            
+                            <button type="button" id="fds-retry-failed" class="button button-secondary">
+                                <?php _e('Retry Failed Tasks', 'filebird-dropbox-sync'); ?>
+                            </button>
+                        </div>
+                        
+                        <div id="fds-action-status" style="margin-top: 10px; padding: 10px; display: none;"></div>
+                    </div>
                     <?php
                 }
                 

@@ -62,9 +62,9 @@ class FDS_Settings {
      */
     public function add_settings_page() {
         add_submenu_page(
-            'upload.php',
+            'options-general.php', // Place it under Settings instead of Media
             __('FileBird Dropbox Sync Settings', 'filebird-dropbox-sync'),
-            __('Dropbox Sync', 'filebird-dropbox-sync'),
+            __('FileBird Dropbox Sync', 'filebird-dropbox-sync'),
             'manage_fds_settings',
             'filebird-dropbox-sync-settings',
             array($this, 'display_settings_page')
@@ -390,6 +390,21 @@ class FDS_Settings {
             echo '<button type="button" id="fds-disconnect-dropbox" class="button">';
             _e('Disconnect from Dropbox', 'filebird-dropbox-sync');
             echo '</button>';
+            
+            // Add webhook information
+            $webhook_url = get_rest_url(null, 'fds/v1/webhook');
+            echo '<div class="fds-webhook-info" style="margin-top: 15px; padding: 10px; background: #f8f8f8; border-left: 4px solid #2271b1;">';
+            echo '<h4 style="margin-top:0;">' . __('Webhook Information', 'filebird-dropbox-sync') . '</h4>';
+            echo '<p>' . __('To ensure real-time sync, add this webhook URL to your Dropbox App:', 'filebird-dropbox-sync') . '</p>';
+            echo '<code style="display:block;padding:8px;background:#fff;margin:10px 0;">' . esc_url($webhook_url) . '</code>';
+            echo '<p>' . __('In your Dropbox App Console:', 'filebird-dropbox-sync') . '</p>';
+            echo '<ol>';
+            echo '<li>' . __('Go to <a href="https://www.dropbox.com/developers/apps" target="_blank">Dropbox Developer Console</a>', 'filebird-dropbox-sync') . '</li>';
+            echo '<li>' . __('Select your app', 'filebird-dropbox-sync') . '</li>';
+            echo '<li>' . __('Navigate to the "Webhooks" section', 'filebird-dropbox-sync') . '</li>';
+            echo '<li>' . __('Add the webhook URL above', 'filebird-dropbox-sync') . '</li>';
+            echo '</ol>';
+            echo '</div>';
         } else {
             echo '<button type="button" id="fds-connect-dropbox" class="button button-primary">';
             _e('Connect to Dropbox', 'filebird-dropbox-sync');

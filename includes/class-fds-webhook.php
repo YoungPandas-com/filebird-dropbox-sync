@@ -106,6 +106,15 @@ class FDS_Webhook {
                 'permission_callback' => '__return_true',
             ),
         ));
+        
+        // Register the webhook with Dropbox if not already registered
+        if (get_option('fds_sync_enabled', false) && !get_option('fds_webhook_registered', false)) {
+            $result = $this->dropbox_api->register_webhook();
+            if ($result) {
+                update_option('fds_webhook_registered', true);
+                $this->logger->info("Webhook successfully registered with Dropbox");
+            }
+        }
     }
 
     /**

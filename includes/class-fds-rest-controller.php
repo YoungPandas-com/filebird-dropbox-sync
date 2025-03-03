@@ -39,6 +39,9 @@ class FDS_REST_Controller {
         add_action('wp_ajax_fds_get_logs', array($this, 'ajax_get_logs'));
         add_action('wp_ajax_fds_clear_logs', array($this, 'ajax_clear_logs'));
         add_action('wp_ajax_fds_oauth_disconnect', array($this, 'ajax_oauth_disconnect'));
+        add_action('wp_ajax_fds_get_sync_stats', array($this, 'ajax_get_sync_stats'));
+        add_action('wp_ajax_fds_force_process_queue', array($this, 'ajax_force_process_queue'));
+        add_action('wp_ajax_fds_retry_failed_tasks', array($this, 'ajax_retry_failed_tasks'));
     }
 
     /**
@@ -73,7 +76,9 @@ class FDS_REST_Controller {
         $level_index = array_search($level, $levels);
         
         if ($level_index !== false) {
-            $where = "WHERE level IN ('" . implode("','", array_slice($levels, 0, $level_index + 1)) . "')";
+            $included_levels = array_slice($levels, 0, $level_index + 1);
+            $placeholders = implode(',', array_fill(0, count($included_levels), '%s'));
+            $where = $wpdb->prepare("WHERE level IN ($placeholders)", $included_levels);
         } else {
             $where = "";
         }
@@ -83,14 +88,28 @@ class FDS_REST_Controller {
         // Format logs for response
         $formatted_logs = array();
         
-        foreach ($logs as $log) {
-            $formatted_logs[] = array(
-                'id' => $log->id,
-                'level' => $log->level,
-                'message' => $log->message,
-                'context' => $log->context,
-                'created_at' => $log->created_at,
-            );
+        if (is_array($logs)) {
+            foreach ($logs as $log) {
+                $formatted_logs[] = array(
+                    'id' => $log->id,
+                    'level' => $log->level,
+                    'message' => $log->message,
+                    'context' => $log->context,
+                    'created_at' => $log->created_at,
+                );
+            }
+        } else {
+            // Add a log entry to help with debugging
+            $this->logger->error("Failed to retrieve logs", [
+                'level' => $level,
+                'page' => $page,
+                'per_page' => $per_page
+            ]);
+            
+            // Force add a log entry to the database
+            $this->db->add_log('error', 'Logs retrieval system test', [
+                'timestamp' => current_time('mysql')
+            ]);
         }
         
         wp_send_json_success(array(
@@ -161,5 +180,101 @@ class FDS_REST_Controller {
         $this->logger->info('Disconnected from Dropbox');
         
         wp_send_json_success(array('message' => __('Successfully disconnected from Dropbox.', 'filebird-dropbox-sync')));
+    }
+
+    /**
+     * Get synchronization statistics via AJAX.
+     *
+     * @since    1.0.0
+     */
+    public function ajax_get_sync_stats() {
+        // Check permissions
+        if (!current_user_can('manage_fds_settings')) {
+            wp_send_json_error(['message' => __('Permission denied.', 'filebird-dropbox-sync')]);
+        }
+        
+        check_ajax_referer('fds-admin-nonce', 'nonce');
+        
+        global $wpdb;
+        
+        // Get file mapping count
+        $file_table = $wpdb->prefix . 'fds_file_mapping';
+        $total_files = $wpdb->get_var("SELECT COUNT(*) FROM $file_table");
+        
+        // Get synced files count (files with a recent sync date)
+        $synced_files = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COUNT(*) FROM $file_table WHERE last_synced > DATE_SUB(NOW(), INTERVAL %d HOUR)",
+                24 // Consider files synced in last 24 hours
+            )
+        );
+        
+        // Get queue stats
+        $queue_table = $wpdb->prefix . 'fds_sync_queue';
+        $pending_tasks = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'pending'");
+        $failed_tasks = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'failed'");
+        
+        wp_send_json_success([
+            'total_files' => intval($total_files),
+            'synced_files' => intval($synced_files),
+            'pending_tasks' => intval($pending_tasks),
+            'failed_tasks' => intval($failed_tasks)
+        ]);
+    }
+
+    /**
+     * Force processing of sync queue via AJAX.
+     *
+     * @since    1.0.0
+     */
+    public function ajax_force_process_queue() {
+        // Check permissions
+        if (!current_user_can('manage_fds_settings')) {
+            wp_send_json_error(['message' => __('Permission denied.', 'filebird-dropbox-sync')]);
+        }
+        
+        check_ajax_referer('fds-admin-nonce', 'nonce');
+        
+        $queue = new FDS_Queue(
+            new FDS_Folder_Sync(new FDS_Dropbox_API(new FDS_Settings()), new FDS_DB(), new FDS_Logger()),
+            new FDS_File_Sync(new FDS_Dropbox_API(new FDS_Settings()), new FDS_DB(), new FDS_Logger()),
+            new FDS_Logger()
+        );
+        
+        $processed = $queue->force_process_queue();
+        
+        wp_send_json_success([
+            'message' => sprintf(__('Successfully processed %d tasks.', 'filebird-dropbox-sync'), $processed),
+            'processed' => $processed
+        ]);
+    }
+
+    /**
+     * Retry failed tasks via AJAX.
+     *
+     * @since    1.0.0
+     */
+    public function ajax_retry_failed_tasks() {
+        // Check permissions
+        if (!current_user_can('manage_fds_settings')) {
+            wp_send_json_error(['message' => __('Permission denied.', 'filebird-dropbox-sync')]);
+        }
+        
+        check_ajax_referer('fds-admin-nonce', 'nonce');
+        
+        global $wpdb;
+        $queue_table = $wpdb->prefix . 'fds_sync_queue';
+        
+        // Update all failed tasks to pending and reset attempts
+        $updated = $wpdb->query(
+            "UPDATE $queue_table 
+            SET status = 'pending', attempts = 0, error_message = '', updated_at = NOW() 
+            WHERE status = 'failed'"
+        );
+        
+        wp_send_json_success([
+            'message' => sprintf(__('Reset %d failed tasks to pending status.', 'filebird-dropbox-sync'), $updated),
+            'updated' => $updated
+        ]);
     }
 }

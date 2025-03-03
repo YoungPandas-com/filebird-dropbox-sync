@@ -196,5 +196,15 @@ class FDS_Activator {
             $index_content = "<?php\n// Silence is golden.\n";
             file_put_contents($index_file, $index_content);
         }
+        
+        // Trigger a full sync if sync is enabled
+        if (get_option('fds_sync_enabled', false)) {
+            $queue = new FDS_Queue(
+                new FDS_Folder_Sync(new FDS_Dropbox_API(new FDS_Settings()), new FDS_DB(), new FDS_Logger()),
+                new FDS_File_Sync(new FDS_Dropbox_API(new FDS_Settings()), new FDS_DB(), new FDS_Logger()),
+                new FDS_Logger()
+            );
+            $queue->start_full_sync();
+        }
     }
 }

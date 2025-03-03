@@ -14,6 +14,9 @@
         
         // Logs
         initLogsHandling();
+        
+        // Initialize sync dashboard
+        initSyncDashboard();
     });
 
     /**
@@ -381,6 +384,131 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+    }
+
+    /**
+     * Initialize sync stats dashboard
+     */
+    function initSyncDashboard() {
+        const $refreshStats = $('#fds-refresh-stats');
+        const $forceProcess = $('#fds-force-process');
+        const $retryFailed = $('#fds-retry-failed');
+        const $actionStatus = $('#fds-action-status');
+        
+        // Load stats on page load
+        loadSyncStats();
+        
+        // Handle button clicks
+        if ($refreshStats.length) {
+            $refreshStats.on('click', function() {
+                loadSyncStats();
+            });
+        }
+        
+        if ($forceProcess.length) {
+            $forceProcess.on('click', function() {
+                if (confirm('Are you sure you want to force process pending tasks?')) {
+                    $forceProcess.prop('disabled', true);
+                    $actionStatus.removeClass('notice-success notice-error')
+                        .addClass('notice notice-info')
+                        .html('<p>Processing queue...</p>')
+                        .show();
+                    
+                    $.ajax({
+                        url: fds_admin_vars.ajax_url,
+                        type: 'POST',
+                        data: {
+                            action: 'fds_force_process_queue',
+                            nonce: fds_admin_vars.nonce
+                        },
+                        success: function(response) {
+                            if (response.success) {
+                                $actionStatus.removeClass('notice-info notice-error')
+                                    .addClass('notice-success')
+                                    .html('<p>' + response.data.message + '</p>');
+                                    
+                                // Refresh stats after processing
+                                loadSyncStats();
+                            } else {
+                                $actionStatus.removeClass('notice-info notice-success')
+                                    .addClass('notice-error')
+                                    .html('<p>Error: ' + (response.data ? response.data.message : 'Unknown error') + '</p>');
+                            }
+                            $forceProcess.prop('disabled', false);
+                        },
+                        error: function(xhr, status, error) {
+                            $actionStatus.removeClass('notice-info notice-success')
+                                .addClass('notice-error')
+                                .html('<p>Error: ' + error + '</p>');
+                            $forceProcess.prop('disabled', false);
+                        }
+                    });
+                }
+            });
+        }
+        
+        if ($retryFailed.length) {
+            $retryFailed.on('click', function() {
+                if (confirm('Are you sure you want to retry all failed tasks?')) {
+                    $retryFailed.prop('disabled', true);
+                    $actionStatus.removeClass('notice-success notice-error')
+                        .addClass('notice notice-info')
+                        .html('<p>Retrying failed tasks...</p>')
+                        .show();
+                    
+                    $.ajax({
+                        url: fds_admin_vars.ajax_url,
+                        type: 'POST',
+                        data: {
+                            action: 'fds_retry_failed_tasks',
+                            nonce: fds_admin_vars.nonce
+                        },
+                        success: function(response) {
+                            if (response.success) {
+                                $actionStatus.removeClass('notice-info notice-error')
+                                    .addClass('notice-success')
+                                    .html('<p>' + response.data.message + '</p>');
+                                    
+                                // Refresh stats after retrying
+                                loadSyncStats();
+                            } else {
+                                $actionStatus.removeClass('notice-info notice-success')
+                                    .addClass('notice-error')
+                                    .html('<p>Error: ' + (response.data ? response.data.message : 'Unknown error') + '</p>');
+                            }
+                            $retryFailed.prop('disabled', false);
+                        },
+                        error: function(xhr, status, error) {
+                            $actionStatus.removeClass('notice-info notice-success')
+                                .addClass('notice-error')
+                                .html('<p>Error: ' + error + '</p>');
+                            $retryFailed.prop('disabled', false);
+                        }
+                    });
+                }
+            });
+        }
+        
+        function loadSyncStats() {
+            $.ajax({
+                url: fds_admin_vars.ajax_url,
+                type: 'POST',
+                data: {
+                    action: 'fds_get_sync_stats',
+                    nonce: fds_admin_vars.nonce
+                },
+                success: function(response) {
+                    if (response.success) {
+                        const data = response.data;
+                        
+                        $('#fds-total-files').text(data.total_files);
+                        $('#fds-synced-files').text(data.synced_files);
+                        $('#fds-pending-tasks').text(data.pending_tasks);
+                        $('#fds-failed-tasks').text(data.failed_tasks);
+                    }
+                }
+            });
         }
     }
 

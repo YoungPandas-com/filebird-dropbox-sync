@@ -597,4 +597,68 @@ class FDS_DB {
             )
         );
     }
+
+    /**
+     * Perform maintenance operations on database tables.
+     *
+     * @since    1.0.0
+     * @return   array|false    Summary of operations performed or false on error.
+     */
+    public function perform_maintenance() {
+        global $wpdb;
+        
+        // Start transaction
+        $wpdb->query('START TRANSACTION');
+        
+        try {
+            // Clean up completed tasks older than 3 days
+            $completed_deleted = $this->cleanup_completed_tasks(3);
+            
+            // Clean up failed tasks older than 7 days
+            $table_name = $wpdb->prefix . 'fds_sync_queue';
+            $failed_deleted = $wpdb->query(
+                $wpdb->prepare(
+                    "DELETE FROM $table_name WHERE status = 'failed' AND updated_at < DATE_SUB(NOW(), INTERVAL %d DAY)",
+                    7
+                )
+            );
+            
+            // Clean up logs older than 30 days
+            $logs_deleted = $this->cleanup_logs(30);
+            
+            // Clean up cache
+            $cache_table = $wpdb->prefix . 'fds_cache';
+            $cache_deleted = $wpdb->query(
+                "DELETE FROM $cache_table WHERE expires_at < NOW()"
+            );
+            
+            // Optimize tables
+            $tables = [
+                $wpdb->prefix . 'fds_folder_mapping',
+                $wpdb->prefix . 'fds_file_mapping',
+                $wpdb->prefix . 'fds_sync_queue',
+                $wpdb->prefix . 'fds_logs',
+                $wpdb->prefix . 'fds_cache'
+            ];
+            
+            foreach ($tables as $table) {
+                $wpdb->query("OPTIMIZE TABLE $table");
+            }
+            
+            // Commit transaction
+            $wpdb->query('COMMIT');
+            
+            return [
+                'completed_tasks_deleted' => $completed_deleted,
+                'failed_tasks_deleted' => $failed_deleted,
+                'logs_deleted' => $logs_deleted,
+                'cache_entries_deleted' => $cache_deleted
+            ];
+        } catch (Exception $e) {
+            // Rollback on error
+            $wpdb->query('ROLLBACK');
+            error_log("Database maintenance failed: " . $e->getMessage());
+            return false;
+        }
+    }
 }

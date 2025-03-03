@@ -151,6 +151,79 @@ class FDS_Queue {
     }
 
     /**
+     * Force process queue items, ignoring locks.
+     *
+     * @since    1.0.0
+     * @return   int    The number of successfully processed items.
+     */
+    public function force_process_queue() {
+        // Ignore lock for force processing
+        delete_transient('fds_queue_lock');
+        
+        // Process a larger batch
+        $batch_size = 50; // Process more items at once
+        
+        // Get the DB instance
+        $db = new FDS_DB();
+        
+        // Process pending items
+        $items = $db->get_pending_tasks($batch_size);
+        
+        if (empty($items)) {
+            $this->logger->info("No pending tasks to process during force processing");
+            return 0;
+        }
+        
+        $this->logger->info("Force processing queue batch", [
+            'batch_size' => count($items)
+        ]);
+        
+        $success_count = 0;
+        $failure_count = 0;
+        
+        foreach ($items as $item) {
+            // Mark as processing
+            $db->update_task_status($item->id, 'processing');
+            
+            try {
+                // Process the item
+                $success = $this->process_item($item);
+                
+                // Update status
+                if ($success) {
+                    $db->update_task_status($item->id, 'completed');
+                    $success_count++;
+                } else {
+                    // If max retries reached, mark as failed
+                    $max_retries = get_option('fds_max_retries', 5);
+                    if ($item->attempts >= $max_retries) {
+                        $db->update_task_status($item->id, 'failed', 'Max retry attempts reached');
+                        $failure_count++;
+                    } else {
+                        $db->update_task_status($item->id, 'pending', 'Will retry later');
+                    }
+                }
+            } catch (Exception $e) {
+                $error_message = "Exception while processing item: " . $e->getMessage();
+                $db->update_task_status($item->id, 'failed', $error_message);
+                $this->logger->error($error_message, [
+                    'item_id' => $item->id,
+                    'exception' => $e->getMessage()
+                ]);
+                $failure_count++;
+            }
+        }
+        
+        $this->logger->info("Force queue processing completed", [
+            'success_count' => $success_count,
+            'failure_count' => $failure_count,
+            'total' => count($items)
+        ]);
+        
+        return $success_count;
+    }
+
+    /**
      * Process an individual queue item.
      *
      * @since    1.0.0

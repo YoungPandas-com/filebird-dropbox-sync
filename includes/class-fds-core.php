@@ -59,6 +59,7 @@ class FDS_Core {
         $this->load_dependencies();
         $this->set_locale();
         $this->initialize_components();
+        $this->initialize_action_scheduler(); // Add this line to call the method
         $this->define_admin_hooks();
         $this->define_sync_hooks();
     }
@@ -258,6 +259,32 @@ class FDS_Core {
             'display'  => __('Every Minute', 'filebird-dropbox-sync'),
         );
         return $schedules;
+    }
+
+    /**
+     * Initialize Action Scheduler for background processing.
+     *
+     * @return bool True if Action Scheduler is available and initialized, false otherwise.
+     */
+    public function initialize_action_scheduler() {
+        // Check if Action Scheduler is available
+        if (class_exists('ActionScheduler')) {
+            // Register our hook for processing queue items
+            add_action('fds_process_queue_worker', [$this->queue, 'process_worker_queue'], 10, 2);
+            
+            // Register our hook for delta sync
+            add_action('fds_continue_delta_sync', [$this->performance, 'delta_sync'], 10, 2);
+            
+            // Register our hook for weekly maintenance
+            add_action('fds_weekly_maintenance', [$this->performance, 'optimize_database_tables']);
+            
+            // Setup parallel processing
+            $this->performance->setup_parallel_processing();
+            
+            $this->logger->info("Action Scheduler hooks registered successfully");
+            return true;
+        }
+        return false;
     }
 
     /**
