@@ -135,7 +135,11 @@ class FDS_Webhook {
             'challenge' => $challenge
         ));
         
-        return new WP_REST_Response($challenge);
+        // Create a plain text response without JSON encoding
+        $response = new WP_REST_Response($challenge);
+        $response->set_headers(['Content-Type' => 'text/plain']);
+        
+        return $response;
     }
 
     /**

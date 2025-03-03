@@ -89,6 +89,24 @@
                 }
             });
         }
+        
+        // Copy webhook URL button
+        $('.copy-webhook-url').on('click', function() {
+            const text = $(this).data('clipboard-text');
+            const tempInput = $('<input>');
+            $('body').append(tempInput);
+            tempInput.val(text).select();
+            document.execCommand('copy');
+            tempInput.remove();
+            
+            // Change button text temporarily
+            const $button = $(this);
+            const originalText = $button.text();
+            $button.text('Copied!');
+            setTimeout(function() {
+                $button.text(originalText);
+            }, 2000);
+        });
     }
 
     /**

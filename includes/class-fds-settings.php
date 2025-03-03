@@ -393,17 +393,24 @@ class FDS_Settings {
             
             // Add webhook information
             $webhook_url = get_rest_url(null, 'fds/v1/webhook');
-            echo '<div class="fds-webhook-info" style="margin-top: 15px; padding: 10px; background: #f8f8f8; border-left: 4px solid #2271b1;">';
-            echo '<h4 style="margin-top:0;">' . __('Webhook Information', 'filebird-dropbox-sync') . '</h4>';
-            echo '<p>' . __('To ensure real-time sync, add this webhook URL to your Dropbox App:', 'filebird-dropbox-sync') . '</p>';
-            echo '<code style="display:block;padding:8px;background:#fff;margin:10px 0;">' . esc_url($webhook_url) . '</code>';
-            echo '<p>' . __('In your Dropbox App Console:', 'filebird-dropbox-sync') . '</p>';
-            echo '<ol>';
-            echo '<li>' . __('Go to <a href="https://www.dropbox.com/developers/apps" target="_blank">Dropbox Developer Console</a>', 'filebird-dropbox-sync') . '</li>';
-            echo '<li>' . __('Select your app', 'filebird-dropbox-sync') . '</li>';
-            echo '<li>' . __('Navigate to the "Webhooks" section', 'filebird-dropbox-sync') . '</li>';
-            echo '<li>' . __('Add the webhook URL above', 'filebird-dropbox-sync') . '</li>';
+            echo '<div class="fds-webhook-info" style="margin-top: 25px; padding: 20px; background: #f9f9f9; border-radius: 5px; border-left: 5px solid #2271b1;">';
+            echo '<h4 style="margin-top:0; color: #2271b1; font-size: 16px;">' . __('Webhook Setup Instructions', 'filebird-dropbox-sync') . '</h4>';
+            echo '<p style="margin-bottom: 15px;">' . __('To enable real-time synchronization, you need to add the following webhook URL to your Dropbox App:', 'filebird-dropbox-sync') . '</p>';
+            echo '<div style="background: #fff; padding: 12px; border-radius: 4px; border: 1px solid #ddd; margin-bottom: 15px;">';
+            echo '<code style="user-select: all; font-size: 14px;">' . esc_url($webhook_url) . '</code>';
+            echo '<button type="button" class="button button-small copy-webhook-url" style="margin-left: 10px; vertical-align: middle;" data-clipboard-text="' . esc_url($webhook_url) . '">' . __('Copy', 'filebird-dropbox-sync') . '</button>';
+            echo '</div>';
+            echo '<div style="background: #f0f6fc; padding: 15px; border-radius: 4px; margin-bottom: 15px;">';
+            echo '<h5 style="margin-top: 0; margin-bottom: 10px; color: #2271b1;">' . __('How to Add Webhook in Dropbox App Console:', 'filebird-dropbox-sync') . '</h5>';
+            echo '<ol style="margin: 0; padding-left: 20px;">';
+            echo '<li style="margin-bottom: 8px;">' . __('Go to <a href="https://www.dropbox.com/developers/apps" target="_blank">Dropbox Developer Console</a>', 'filebird-dropbox-sync') . '</li>';
+            echo '<li style="margin-bottom: 8px;">' . __('Select your app', 'filebird-dropbox-sync') . '</li>';
+            echo '<li style="margin-bottom: 8px;">' . __('Navigate to the "Webhooks" section', 'filebird-dropbox-sync') . '</li>';
+            echo '<li style="margin-bottom: 8px;">' . __('Enter the webhook URL shown above', 'filebird-dropbox-sync') . '</li>';
+            echo '<li style="margin-bottom: 0;">' . __('Click "Add" to save your webhook', 'filebird-dropbox-sync') . '</li>';
             echo '</ol>';
+            echo '</div>';
+            echo '<p style="margin-bottom: 0; font-style: italic; color: #666;">' . __('Note: If you receive a "challenge" error, ensure your server is properly configured to handle webhook requests.', 'filebird-dropbox-sync') . '</p>';
             echo '</div>';
         } else {
             echo '<button type="button" id="fds-connect-dropbox" class="button button-primary">';
