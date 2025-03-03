@@ -32,6 +32,7 @@ class FDS_REST_Controller {
      * @since    1.0.0
      */
     public function __construct() {
+        // Initialize properties safely
         $this->db = new FDS_DB();
         $this->logger = new FDS_Logger();
         

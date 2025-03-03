@@ -665,4 +665,179 @@ class FDS_Performance {
             );
         }
     }
+
+    /**
+     * Setup parallel processing for better performance with enhanced error handling
+     * 
+     * @return boolean True if successfully set up Action Scheduler, false if using WP-Cron fallback
+     */
+    public function setup_parallel_processing() {
+        // Ensure logger is available and create if not
+        if (!isset($this->logger) || !is_object($this->logger)) {
+            try {
+                $this->logger = new FDS_Logger();
+            } catch (Exception $e) {
+                // Cannot create logger, create minimal implementation
+                $this->logger = new stdClass();
+                $this->logger->info = function($msg) { error_log('FDS Info: ' . $msg); };
+                $this->logger->error = function($msg) { error_log('FDS Error: ' . $msg); };
+                $this->logger->warning = function($msg) { error_log('FDS Warning: ' . $msg); };
+            }
+        }
+        
+        // Initialize success tracking
+        $action_scheduler_success = false;
+        
+        // Check if Action Scheduler is available
+        if (class_exists('ActionScheduler') && class_exists('ActionScheduler_QueueRunner')) {
+            try {
+                // Validate dependencies are available
+                if (!function_exists('as_unschedule_all_actions') || 
+                    !function_exists('as_schedule_recurring_action') || 
+                    !function_exists('as_next_scheduled_action')) {
+                    throw new Exception('Required Action Scheduler functions are missing');
+                }
+                
+                // Unschedule existing actions to prevent duplicates
+                as_unschedule_all_actions('fds_process_queue_worker', null, 'filebird-dropbox-sync');
+                $this->logger->info("Removed any existing queue worker schedules");
+                
+                // Get and validate worker count from settings
+                $worker_count = intval(get_option('fds_worker_count', 5));
+                if ($worker_count <= 0) {
+                    $worker_count = 1; // Ensure at least one worker
+                    $this->logger->warning("Invalid worker count detected, defaulting to 1 worker");
+                } else if ($worker_count > 10) {
+                    $worker_count = 10; // Cap at 10 workers to prevent overload
+                    $this->logger->warning("Excessive worker count detected, limiting to 10 workers");
+                }
+                
+                // Schedule multiple workers for parallel processing
+                $scheduled_workers = 0;
+                for ($i = 1; $i <= $worker_count; $i++) {
+                    try {
+                        // Schedule immediately and then recurring
+                        as_schedule_recurring_action(
+                            time(), 
+                            max(30, intval(get_option('fds_worker_interval', 30))), 
+                            'fds_process_queue_worker', 
+                            ['worker_id' => $i], 
+                            'filebird-dropbox-sync'
+                        );
+                        $scheduled_workers++;
+                        $this->logger->info("Scheduled worker $i for parallel processing");
+                    } catch (Exception $e) {
+                        $this->logger->error("Failed to schedule worker $i: " . $e->getMessage());
+                    }
+                }
+                
+                // Verify at least one worker was scheduled
+                if ($scheduled_workers === 0) {
+                    throw new Exception('Failed to schedule any worker processes');
+                }
+                
+                // Schedule maintenance task
+                try {
+                    if (!as_next_scheduled_action('fds_weekly_maintenance', null, 'filebird-dropbox-sync')) {
+                        as_schedule_recurring_action(
+                            time(), 
+                            WEEK_IN_SECONDS, 
+                            'fds_weekly_maintenance', 
+                            [], 
+                            'filebird-dropbox-sync'
+                        );
+                        $this->logger->info("Scheduled weekly maintenance task");
+                    } else {
+                        $this->logger->info("Weekly maintenance task already scheduled");
+                    }
+                } catch (Exception $e) {
+                    $this->logger->error("Failed to schedule maintenance task: " . $e->getMessage());
+                    // Non-critical error, continue
+                }
+                
+                // Schedule a delta sync task
+                try {
+                    $root_folder = sanitize_text_field(get_option('fds_root_dropbox_folder', '/Website'));
+                    // Ensure root folder starts with / for Dropbox API
+                    if (empty($root_folder) || $root_folder[0] !== '/') {
+                        $root_folder = '/' . $root_folder;
+                    }
+                    
+                    if (!as_next_scheduled_action('fds_daily_delta_sync', null, 'filebird-dropbox-sync')) {
+                        as_schedule_recurring_action(
+                            time(), 
+                            DAY_IN_SECONDS, 
+                            'fds_continue_delta_sync', 
+                            ['path' => $root_folder], 
+                            'filebird-dropbox-sync'
+                        );
+                        $this->logger->info("Scheduled daily delta sync for path: $root_folder");
+                    } else {
+                        $this->logger->info("Daily delta sync already scheduled");
+                    }
+                } catch (Exception $e) {
+                    $this->logger->error("Failed to schedule delta sync: " . $e->getMessage());
+                    // Non-critical error, continue
+                }
+                
+                $this->logger->info("Action Scheduler setup completed successfully with $scheduled_workers workers");
+                $action_scheduler_success = true;
+                
+            } catch (Exception $e) {
+                // Log detailed error and fall back to WP Cron
+                $this->logger->error("Error setting up Action Scheduler: " . $e->getMessage());
+                $this->logger->error("Trace: " . $e->getTraceAsString());
+                $action_scheduler_success = false;
+            }
+        } else {
+            $this->logger->warning("Action Scheduler not available. Required for optimal performance.");
+        }
+        
+        // If Action Scheduler setup failed or is not available, fall back to WP Cron
+        if (!$action_scheduler_success) {
+            $this->logger->info("Falling back to standard WP-Cron for queue processing");
+            
+            // Clean up any existing schedules to prevent duplicates
+            $timestamp = wp_next_scheduled('fds_process_queue');
+            if ($timestamp) {
+                wp_unschedule_event($timestamp, 'fds_process_queue');
+            }
+            
+            $maintenance_timestamp = wp_next_scheduled('fds_weekly_maintenance');
+            if ($maintenance_timestamp) {
+                wp_unschedule_event($maintenance_timestamp, 'fds_weekly_maintenance');
+            }
+            
+            // Schedule with WP-Cron
+            try {
+                if (!wp_next_scheduled('fds_process_queue')) {
+                    $scheduled = wp_schedule_event(time(), 'one_minute', 'fds_process_queue');
+                    if ($scheduled === false) {
+                        $this->logger->error("Failed to schedule queue processing with WP-Cron");
+                    } else {
+                        $this->logger->info("Scheduled queue processing with WP-Cron");
+                    }
+                }
+                
+                if (!wp_next_scheduled('fds_weekly_maintenance')) {
+                    $scheduled = wp_schedule_event(time(), 'weekly', 'fds_weekly_maintenance');
+                    if ($scheduled === false) {
+                        $this->logger->error("Failed to schedule maintenance with WP-Cron");
+                    } else {
+                        $this->logger->info("Scheduled weekly maintenance with WP-Cron");
+                    }
+                }
+            } catch (Exception $e) {
+                $this->logger->error("Error setting up WP-Cron fallback: " . $e->getMessage());
+                // Ultimate fallback - show admin notice
+                add_action('admin_notices', function() {
+                    echo '<div class="error"><p>';
+                    echo 'FileBird Dropbox Sync: Failed to setup background processing. Please check server configuration.';
+                    echo '</p></div>';
+                });
+            }
+        }
+        
+        return $action_scheduler_success;
+    }
 }

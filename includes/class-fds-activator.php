@@ -197,14 +197,9 @@ class FDS_Activator {
             file_put_contents($index_file, $index_content);
         }
         
-        // Trigger a full sync if sync is enabled
+        // Instead of trying to directly run a sync, just set a flag to run it later
         if (get_option('fds_sync_enabled', false)) {
-            $queue = new FDS_Queue(
-                new FDS_Folder_Sync(new FDS_Dropbox_API(new FDS_Settings()), new FDS_DB(), new FDS_Logger()),
-                new FDS_File_Sync(new FDS_Dropbox_API(new FDS_Settings()), new FDS_DB(), new FDS_Logger()),
-                new FDS_Logger()
-            );
-            $queue->start_full_sync();
+            update_option('fds_run_full_sync_after_activation', true);
         }
     }
 }

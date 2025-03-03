@@ -62,6 +62,9 @@ class FDS_Core {
         $this->initialize_action_scheduler(); // Add this line to call the method
         $this->define_admin_hooks();
         $this->define_sync_hooks();
+        
+        // Add hook for post-activation tasks
+        add_action('admin_init', array($this, 'check_post_activation_tasks'));
     }
 
     /**
@@ -268,23 +271,50 @@ class FDS_Core {
      */
     public function initialize_action_scheduler() {
         // Check if Action Scheduler is available
-        if (class_exists('ActionScheduler')) {
-            // Register our hook for processing queue items
-            add_action('fds_process_queue_worker', [$this->queue, 'process_worker_queue'], 10, 2);
-            
-            // Register our hook for delta sync
-            add_action('fds_continue_delta_sync', [$this->performance, 'delta_sync'], 10, 2);
-            
-            // Register our hook for weekly maintenance
-            add_action('fds_weekly_maintenance', [$this->performance, 'optimize_database_tables']);
-            
-            // Setup parallel processing
-            $this->performance->setup_parallel_processing();
-            
-            $this->logger->info("Action Scheduler hooks registered successfully");
-            return true;
+        if (!class_exists('ActionScheduler')) {
+            return false;
         }
-        return false;
+        
+        // Make sure all required components exist before registering hooks
+        if (!isset($this->queue) || !isset($this->performance)) {
+            return false;
+        }
+        
+        // Register our hook for processing queue items
+        add_action('fds_process_queue_worker', array($this->queue, 'process_worker_queue'), 10, 2);
+        
+        // Register our hook for delta sync
+        add_action('fds_continue_delta_sync', array($this->performance, 'delta_sync'), 10, 2);
+        
+        // Register our hook for weekly maintenance
+        add_action('fds_weekly_maintenance', array($this->performance, 'optimize_database_tables'));
+        
+        // Setup parallel processing if the method exists
+        if (method_exists($this->performance, 'setup_parallel_processing')) {
+            $this->performance->setup_parallel_processing();
+        }
+        
+        if (isset($this->logger)) {
+            $this->logger->info("Action Scheduler hooks registered successfully");
+        }
+        
+        return true;
+    }
+
+    /**
+     * Check for post-activation tasks
+     */
+    public function check_post_activation_tasks() {
+        // Check if we need to run a full sync after activation
+        if (get_option('fds_run_full_sync_after_activation', false)) {
+            delete_option('fds_run_full_sync_after_activation');
+            
+            // Make sure all components are initialized
+            if ($this->queue && $this->logger) {
+                $this->logger->info("Running full sync after activation");
+                $this->queue->start_full_sync();
+            }
+        }
     }
 
     /**
@@ -294,5 +324,8 @@ class FDS_Core {
      */
     public function run() {
         $this->loader->run();
+        
+        // Check for post-activation tasks
+        add_action('init', array($this, 'check_post_activation_tasks'), 20);
     }
 }
