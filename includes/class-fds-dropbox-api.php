@@ -433,6 +433,7 @@ class FDS_Dropbox_API {
         $refresh_token = get_option('fds_dropbox_refresh_token', '');
         
         if (empty($refresh_token)) {
+            $this->logger->error("No refresh token available for Dropbox API");
             return false;
         }
         
@@ -442,8 +443,12 @@ class FDS_Dropbox_API {
             $app_secret = get_option('fds_dropbox_app_secret', '');
             
             if (empty($app_key) || empty($app_secret)) {
-                throw new Exception("App key or secret not configured");
+                $this->logger->error("App key or secret not configured for Dropbox API");
+                return false;
             }
+            
+            // Log attempt to refresh
+            $this->logger->info("Attempting to refresh Dropbox access token");
             
             $args = [
                 'method' => 'POST',
@@ -455,13 +460,17 @@ class FDS_Dropbox_API {
                     'refresh_token' => $refresh_token,
                     'client_id' => $app_key,
                     'client_secret' => $app_secret
-                ]
+                ],
+                'timeout' => 30 // Increased timeout for slow connections
             ];
             
             $response = wp_remote_request($url, $args);
             
             if (is_wp_error($response)) {
-                throw new Exception($response->get_error_message());
+                $this->logger->error("Error refreshing Dropbox token", [
+                    'error' => $response->get_error_message()
+                ]);
+                return false;
             }
             
             $status_code = wp_remote_retrieve_response_code($response);
@@ -469,7 +478,11 @@ class FDS_Dropbox_API {
             $result = json_decode($body, true);
             
             if ($status_code !== 200 || !isset($result['access_token'])) {
-                throw new Exception("Failed to refresh token: " . ($result['error_description'] ?? $body));
+                $this->logger->error("Failed to refresh Dropbox token", [
+                    'status_code' => $status_code,
+                    'response' => $body
+                ]);
+                return false;
             }
             
             // Save the new token
@@ -484,7 +497,7 @@ class FDS_Dropbox_API {
             
             return true;
         } catch (Exception $e) {
-            $this->logger->error("Failed to refresh access token", [
+            $this->logger->error("Exception refreshing Dropbox token", [
                 'exception' => $e->getMessage()
             ]);
             

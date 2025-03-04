@@ -303,6 +303,12 @@ class FDS_Core {
         // Register webhook endpoint
         $this->loader->add_action('rest_api_init', $this->webhook, 'register_webhook_endpoint');
         
+        // Check if FileBird is active
+        if (!class_exists('FileBird\\Model\\Folder')) {
+            $this->logger->error("FileBird plugin not detected, sync hooks not registered");
+            return;
+        }
+        
         // FileBird folder hooks
         $this->loader->add_action('fbv_after_folder_created', $this->folder_sync, 'on_folder_created', 10, 2);
         $this->loader->add_action('fbv_after_folder_renamed', $this->folder_sync, 'on_folder_renamed', 10, 2);
@@ -320,6 +326,8 @@ class FDS_Core {
         
         // Register custom cron schedules
         $this->loader->add_filter('cron_schedules', $this, 'add_cron_schedules');
+        
+        $this->logger->info("Successfully registered FileBird sync hooks");
     }
 
     /**
@@ -330,12 +338,25 @@ class FDS_Core {
     public function initialize_action_scheduler() {
         // Check if Action Scheduler is available
         if (!class_exists('ActionScheduler')) {
-            // Schedule regular cron events instead
+            $this->logger->info("Action Scheduler not available, using WP-Cron for queue processing");
+            
+            // Clear any existing scheduled events to avoid duplicates
+            wp_clear_scheduled_hook('fds_process_queue');
+            
+            // Schedule regular cron events
             if (!wp_next_scheduled('fds_process_queue')) {
-                wp_schedule_event(time(), 'one_minute', 'fds_process_queue');
+                $scheduled = wp_schedule_event(time(), 'one_minute', 'fds_process_queue');
+                if ($scheduled === false) {
+                    $this->logger->error("Failed to schedule fds_process_queue event with WP-Cron");
+                } else {
+                    $this->logger->info("Successfully scheduled fds_process_queue event with WP-Cron");
+                }
             }
+            
             return false;
         }
+        
+        $this->logger->info("Action Scheduler available, using for optimized queue processing");
         
         // Register our hook for processing queue items
         add_action('fds_process_queue_worker', array($this->queue, 'process_worker_queue'), 10, 2);

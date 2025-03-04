@@ -80,14 +80,32 @@ class FDS_DB {
             return true;
         }
 
-        // Include the activator class to create tables
         require_once FDS_PLUGIN_DIR . 'includes/class-fds-activator.php';
         
-        // Run the activation function to create tables
-        FDS_Activator::activate();
-        
-        // Verify tables were created
-        return $this->all_tables_exist();
+        try {
+            // Run the activation function to create tables
+            FDS_Activator::activate();
+            
+            // Verify tables were created
+            $all_tables_created = $this->all_tables_exist();
+            
+            if (!$all_tables_created) {
+                // Log the error
+                error_log('FileBird Dropbox Sync: Failed to create one or more database tables.');
+                
+                // Check which tables are missing
+                foreach (array_keys($this->required_tables) as $table_key) {
+                    if (!$this->table_exists($table_key)) {
+                        error_log('FileBird Dropbox Sync: Table missing - ' . $this->required_tables[$table_key]);
+                    }
+                }
+            }
+            
+            return $all_tables_created;
+        } catch (Exception $e) {
+            error_log('FileBird Dropbox Sync: Exception during table creation - ' . $e->getMessage());
+            return false;
+        }
     }
 
     /**

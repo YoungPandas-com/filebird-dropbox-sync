@@ -59,23 +59,56 @@ class FDS_Queue {
     }
 
     /**
-     * Process items in the queue.
+     * Process items in the queue with improved error handling and logging.
      *
      * @since    1.0.0
      */
     public function process_queued_items() {
         // Check if sync is enabled
         if (!get_option('fds_sync_enabled', false)) {
+            $this->logger->debug("Queue processing skipped - sync is disabled");
             return;
         }
         
-        // Get lock
-        if (!$this->get_lock()) {
-            $this->logger->debug("Could not acquire queue lock, another process is running");
+        // Get lock with timeout value
+        if (!$this->get_lock_with_timeout()) {
+            $this->logger->debug("Could not acquire queue lock, another process might be running");
             return;
         }
         
         try {
+            // Log processing start with system info
+            $this->logger->info("Starting queue processing", [
+                'memory_limit' => ini_get('memory_limit'),
+                'max_execution_time' => ini_get('max_execution_time'),
+                'php_version' => phpversion(),
+                'time' => current_time('mysql')
+            ]);
+            
+            // Check if the Dropbox API has a valid token
+            $dropbox_api = null;
+            if (class_exists('FDS_Dropbox_API') && class_exists('FDS_Settings')) {
+                $settings = new FDS_Settings();
+                $dropbox_api = new FDS_Dropbox_API($settings, $this->logger);
+                
+                if (!$dropbox_api->has_valid_token()) {
+                    $this->logger->error("Queue processing stopped - no valid Dropbox token");
+                    $this->release_lock();
+                    return;
+                }
+            } else {
+                $this->logger->error("Queue processing skipped - required classes not found");
+                $this->release_lock();
+                return;
+            }
+            
+            // Verify that all required tables exist
+            if (!$this->verify_database_tables()) {
+                $this->logger->error("Queue processing stopped - database tables missing");
+                $this->release_lock();
+                return;
+            }
+            
             // Get the DB instance
             $db = new FDS_DB();
             
@@ -87,6 +120,7 @@ class FDS_Queue {
             
             if (empty($items)) {
                 $this->logger->debug("No pending tasks to process");
+                $this->release_lock();
                 return;
             }
             
@@ -98,10 +132,43 @@ class FDS_Queue {
             $failure_count = 0;
             
             foreach ($items as $item) {
+                // Log item details for debugging
+                $this->logger->debug("Processing queue item", [
+                    'id' => $item->id,
+                    'action' => $item->action,
+                    'item_type' => $item->item_type,
+                    'direction' => $item->direction,
+                    'attempts' => $item->attempts
+                ]);
+                
                 // Mark as processing
                 $db->update_task_status($item->id, 'processing');
                 
                 try {
+                    // Unserialize data with error checking
+                    $data = $item->data;
+                    if (!empty($data)) {
+                        try {
+                            $data = maybe_unserialize($data);
+                            if (is_string($data) && !empty($data)) {
+                                // Double check if it's still serialized (sometimes maybe_unserialize fails)
+                                $data2 = @unserialize($data);
+                                if ($data2 !== false) {
+                                    $data = $data2;
+                                }
+                            }
+                        } catch (Exception $e) {
+                            $this->logger->error("Failed to unserialize data for item", [
+                                'item_id' => $item->id,
+                                'data' => $item->data,
+                                'error' => $e->getMessage()
+                            ]);
+                        }
+                    }
+                    
+                    // Re-assign the data
+                    $item->data = $data;
+                    
                     // Process the item
                     $success = $this->process_item($item);
                     
@@ -109,14 +176,28 @@ class FDS_Queue {
                     if ($success) {
                         $db->update_task_status($item->id, 'completed');
                         $success_count++;
+                        $this->logger->info("Queue item processed successfully", [
+                            'item_id' => $item->id,
+                            'action' => $item->action,
+                            'item_type' => $item->item_type
+                        ]);
                     } else {
                         // If max retries reached, mark as failed
                         $max_retries = get_option('fds_max_retries', 3);
                         if ($item->attempts >= $max_retries) {
                             $db->update_task_status($item->id, 'failed', 'Max retry attempts reached');
                             $failure_count++;
+                            $this->logger->error("Queue item failed after max retries", [
+                                'item_id' => $item->id,
+                                'attempts' => $item->attempts,
+                                'max_retries' => $max_retries
+                            ]);
                         } else {
                             $db->update_task_status($item->id, 'pending', 'Will retry later');
+                            $this->logger->warning("Queue item processing failed, will retry", [
+                                'item_id' => $item->id,
+                                'attempts' => $item->attempts + 1
+                            ]);
                         }
                     }
                 } catch (Exception $e) {
@@ -136,6 +217,12 @@ class FDS_Queue {
                 'failure_count' => $failure_count,
                 'total' => count($items)
             ]);
+            
+            // If there are more items to process, schedule another run
+            if ($success_count > 0 || $failure_count > 0) {
+                // Schedule more processing
+                $this->schedule_next_run();
+            }
             
             // Cleanup completed tasks older than 7 days
             $db->cleanup_completed_tasks(7);
@@ -475,11 +562,20 @@ class FDS_Queue {
      * Start a full sync between WordPress and Dropbox.
      *
      * @since    1.0.0
+     * @return   boolean    True if sync was started successfully, false otherwise.
      */
     public function start_full_sync() {
         // Check if sync is enabled
         if (!get_option('fds_sync_enabled', false)) {
-            return;
+            $this->logger->warning("Cannot start full sync - sync is not enabled");
+            return false;
+        }
+        
+        // Check Dropbox connection
+        $dropbox_api = new FDS_Dropbox_API(new FDS_Settings());
+        if (!$dropbox_api->has_valid_token()) {
+            $this->logger->error("Cannot start full sync - no valid Dropbox token");
+            return false;
         }
         
         // Queue the sync task
@@ -500,6 +596,8 @@ class FDS_Queue {
         
         // Trigger an immediate cron event to start processing
         wp_schedule_single_event(time(), 'fds_process_queue');
+        
+        return true;
     }
 
     /**
@@ -527,5 +625,85 @@ class FDS_Queue {
      */
     protected function release_lock() {
         delete_transient('fds_queue_lock');
+    }
+
+    /**
+     * Get a lock with more reliable timeout handling.
+     *
+     * @return boolean True if lock acquired, false otherwise.
+     */
+    protected function get_lock_with_timeout() {
+        $lock = get_transient('fds_queue_lock');
+        
+        if ($lock) {
+            // Check if the lock is stale (older than the lock time)
+            $lock_time = intval(get_option('fds_queue_lock_time', 0));
+            
+            if ($lock_time > 0 && time() - $lock_time > $this->lock_time) {
+                // Lock is stale, force release it
+                $this->logger->warning("Detected stale queue lock, forcing release", [
+                    'lock_time' => date('Y-m-d H:i:s', $lock_time),
+                    'stale_for' => human_time_diff($lock_time + $this->lock_time, time())
+                ]);
+                
+                delete_transient('fds_queue_lock');
+                delete_option('fds_queue_lock_time');
+                
+                // Sleep briefly to allow other processes to finish
+                sleep(2);
+                
+                // Try to acquire the lock again
+                return $this->get_lock_with_timeout();
+            }
+            
+            return false;
+        }
+        
+        // Set the lock and record the time
+        set_transient('fds_queue_lock', '1', $this->lock_time);
+        update_option('fds_queue_lock_time', time());
+        
+        return true;
+    }
+
+    /**
+     * Schedule the next queue processing run.
+     */
+    protected function schedule_next_run() {
+        // If Action Scheduler is available, use it
+        if (class_exists('ActionScheduler') && function_exists('as_schedule_single_action')) {
+            if (!as_next_scheduled_action('fds_process_queue')) {
+                as_schedule_single_action(time() + 30, 'fds_process_queue');
+            }
+        } else {
+            // Otherwise use WP-Cron
+            if (!wp_next_scheduled('fds_process_queue')) {
+                wp_schedule_single_event(time() + 30, 'fds_process_queue');
+            }
+        }
+    }
+
+    /**
+     * Verify that all required database tables exist.
+     * 
+     * @return boolean True if all tables exist, false otherwise.
+     */
+    protected function verify_database_tables() {
+        global $wpdb;
+        
+        $required_tables = [
+            $wpdb->prefix . 'fds_folder_mapping',
+            $wpdb->prefix . 'fds_file_mapping',
+            $wpdb->prefix . 'fds_sync_queue',
+            $wpdb->prefix . 'fds_logs'
+        ];
+        
+        foreach ($required_tables as $table) {
+            if ($wpdb->get_var("SHOW TABLES LIKE '$table'") !== $table) {
+                return false;
+            }
+        }
+        
+        return true;
     }
 }

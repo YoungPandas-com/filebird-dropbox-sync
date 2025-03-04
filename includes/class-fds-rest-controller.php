@@ -60,6 +60,8 @@ class FDS_REST_Controller {
         add_action('wp_ajax_fds_force_process_queue', array($this, 'ajax_force_process_queue'));
         add_action('wp_ajax_fds_retry_failed_tasks', array($this, 'ajax_retry_failed_tasks'));
         add_action('wp_ajax_fds_dismiss_welcome_notice', array($this, 'ajax_dismiss_welcome_notice'));
+        add_action('wp_ajax_fds_manual_sync', array($this, 'ajax_manual_sync'));
+        add_action('wp_ajax_fds_check_sync_status', array($this, 'ajax_check_sync_status'));
     }
 
     /**
@@ -502,40 +504,60 @@ class FDS_REST_Controller {
         
         check_ajax_referer('fds-admin-nonce', 'nonce');
         
-        global $wpdb;
-        
-        // Get file mapping count
-        $file_table = $wpdb->prefix . 'fds_file_mapping';
-        $total_files = $wpdb->get_var("SELECT COUNT(*) FROM $file_table");
-        
-        // Get synced files count (files with a recent sync date)
-        $synced_files = $wpdb->get_var(
-            $wpdb->prepare(
-                "SELECT COUNT(*) FROM $file_table WHERE last_synced > DATE_SUB(NOW(), INTERVAL %d HOUR)",
-                24 // Consider files synced in last 24 hours
-            )
-        );
-        
-        // Get queue stats
-        $queue_table = $wpdb->prefix . 'fds_sync_queue';
-        $pending_tasks = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'pending'");
-        $processing_tasks = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'processing'");
-        $failed_tasks = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'failed'");
-        $completed_tasks = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'completed'");
-        
-        // Check if there's a queue lock (processing in progress)
-        $is_processing = get_transient('fds_queue_lock') ? true : false;
-        
-        wp_send_json_success([
-            'total_files' => intval($total_files),
-            'synced_files' => intval($synced_files),
-            'pending_tasks' => intval($pending_tasks),
-            'processing_tasks' => intval($processing_tasks),
-            'failed_tasks' => intval($failed_tasks),
-            'completed_tasks' => intval($completed_tasks),
-            'is_processing' => $is_processing,
-            'last_updated' => current_time('mysql')
-        ]);
+        try {
+            global $wpdb;
+            
+            // Check if tables exist
+            $file_table = $wpdb->prefix . 'fds_file_mapping';
+            $queue_table = $wpdb->prefix . 'fds_sync_queue';
+            
+            $file_table_exists = $wpdb->get_var("SHOW TABLES LIKE '$file_table'") === $file_table;
+            $queue_table_exists = $wpdb->get_var("SHOW TABLES LIKE '$queue_table'") === $queue_table;
+            
+            if (!$file_table_exists || !$queue_table_exists) {
+                // Try to create tables
+                $db = new FDS_DB();
+                $created = $db->create_tables_if_needed();
+                
+                if (!$created) {
+                    wp_send_json_error(['message' => __('Database tables missing. Please deactivate and reactivate the plugin.', 'filebird-dropbox-sync')]);
+                    return;
+                }
+            }
+            
+            // Original stats gathering code with null coalescing to prevent errors
+            $total_files = $wpdb->get_var("SELECT COUNT(*) FROM $file_table") ?: 0;
+            $synced_files = $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT COUNT(*) FROM $file_table WHERE last_synced > DATE_SUB(NOW(), INTERVAL %d HOUR)",
+                    24 // Consider files synced in last 24 hours
+                )
+            ) ?: 0;
+            
+            // Rest of the stats retrieval code...
+            $pending_tasks = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'pending'") ?: 0;
+            $processing_tasks = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'processing'") ?: 0;
+            $failed_tasks = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'failed'") ?: 0;
+            $completed_tasks = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'completed'") ?: 0;
+            
+            // Check if there's a queue lock (processing in progress)
+            $is_processing = get_transient('fds_queue_lock') ? true : false;
+            
+            wp_send_json_success([
+                'total_files' => intval($total_files),
+                'synced_files' => intval($synced_files),
+                'pending_tasks' => intval($pending_tasks),
+                'processing_tasks' => intval($processing_tasks),
+                'failed_tasks' => intval($failed_tasks),
+                'completed_tasks' => intval($completed_tasks),
+                'is_processing' => $is_processing,
+                'last_updated' => current_time('mysql')
+            ]);
+        } catch (Exception $e) {
+            wp_send_json_error([
+                'message' => __('Error retrieving sync statistics:', 'filebird-dropbox-sync') . ' ' . $e->getMessage()
+            ]);
+        }
     }
 
     /**
@@ -607,6 +629,67 @@ class FDS_REST_Controller {
         check_ajax_referer('fds-dismiss-welcome', 'nonce');
         update_option('fds_welcome_notice_dismissed', true);
         wp_send_json_success();
+    }
+
+    /**
+     * Initiate manual sync via AJAX.
+     *
+     * @since    1.0.0
+     */
+    public function ajax_manual_sync() {
+        // Check permissions
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Permission denied.', 'filebird-dropbox-sync')]);
+        }
+        
+        check_ajax_referer('fds-admin-nonce', 'nonce');
+        
+        // Get queue instance
+        $queue = $this->get_queue_instance();
+        
+        // Start full sync
+        $queue->start_full_sync();
+        
+        // Log action
+        $this->logger->info("Manual sync initiated by administrator");
+        
+        wp_send_json_success(['message' => __('Synchronization started. This process will continue in the background.', 'filebird-dropbox-sync')]);
+    }
+
+    /**
+     * Check sync status via AJAX.
+     *
+     * @since    1.0.0
+     */
+    public function ajax_check_sync_status() {
+        // Check permissions
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Permission denied.', 'filebird-dropbox-sync')]);
+        }
+        
+        check_ajax_referer('fds-admin-nonce', 'nonce');
+        
+        global $wpdb;
+        $queue_table = $wpdb->prefix . 'fds_sync_queue';
+        
+        // Get counts
+        $total = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table") ?: 0;
+        $pending = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'pending'") ?: 0;
+        $processing = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'processing'") ?: 0;
+        $completed = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'completed'") ?: 0;
+        $failed = $wpdb->get_var("SELECT COUNT(*) FROM $queue_table WHERE status = 'failed'") ?: 0;
+        
+        // Check if there's a lock
+        $is_processing = get_transient('fds_queue_lock') ? true : false;
+        
+        wp_send_json_success([
+            'total' => intval($total),
+            'pending' => intval($pending),
+            'processing' => intval($processing),
+            'completed' => intval($completed),
+            'failed' => intval($failed),
+            'is_processing' => $is_processing
+        ]);
     }
 
     /**
