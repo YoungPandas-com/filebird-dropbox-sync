@@ -573,14 +573,41 @@ function initClipboard() {
                 let context = '';
                 try {
                     if (log.context) {
-                        const contextObj = typeof log.context === 'string' ? JSON.parse(log.context) : log.context;
+                        // First try to parse as JSON (if it's stored as a JSON string)
+                        let contextObj;
+                        
+                        if (typeof log.context === 'string') {
+                            // Try to parse the string as JSON
+                            try {
+                                contextObj = JSON.parse(log.context);
+                            } catch (jsonError) {
+                                // If JSON parsing fails, try to unserialize if it looks like serialized PHP
+                                if (log.context.indexOf('a:') === 0 || log.context.indexOf('s:') === 0 || 
+                                    log.context.indexOf('i:') === 0 || log.context.indexOf('b:') === 0) {
+                                    // This looks like serialized PHP data - we'll just show it as is
+                                    contextObj = {
+                                        note: 'Serialized PHP data',
+                                        raw: log.context.substring(0, 200) + (log.context.length > 200 ? '...' : '')
+                                    };
+                                } else {
+                                    // Not JSON or serialized PHP, just use as plain text
+                                    contextObj = { text: log.context };
+                                }
+                            }
+                        } else {
+                            contextObj = log.context;
+                        }
+                        
+                        // Now format the context for display with proper escaping
                         context = '<a href="#" class="fds-log-details-button" data-context=\'' + 
                             escapeHtml(JSON.stringify(contextObj, null, 2)) + '\'>View Details</a>';
                     } else {
                         context = 'N/A';
                     }
                 } catch (e) {
-                    context = 'Invalid data';
+                    // Provide more useful debug info
+                    context = 'Invalid data: ' + e.message;
+                    console.error('Error processing log context:', e, log);
                 }
                 
                 html += '<tr>' +

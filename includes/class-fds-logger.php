@@ -218,6 +218,9 @@ class FDS_Logger {
             $message = sprintf('%s: %s in %s:%s', get_class($message), $message->getMessage(), $message->getFile(), $message->getLine());
         }
         
+        // Always ensure DB is initialized - THIS IS THE FIX
+        $this->ensure_db_initialized();
+        
         // Add to database logs if DB is available
         if ($this->db_initialized) {
             try {

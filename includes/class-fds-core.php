@@ -229,6 +229,16 @@ class FDS_Core {
         $this->db = new FDS_DB();
         $this->logger = new FDS_Logger();
         
+        // Important: Set the DB in the logger to ensure proper initialization
+        $this->logger->set_db($this->db);
+        
+        // Add a test log to verify logging is working
+        $this->logger->info('Plugin initialization started', [
+            'version' => FDS_VERSION,
+            'php_version' => PHP_VERSION,
+            'wp_version' => get_bloginfo('version')
+        ]);
+        
         // Initialize settings with the logger
         $this->settings = new FDS_Settings($this->logger);
         

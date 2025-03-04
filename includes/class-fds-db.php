@@ -723,12 +723,32 @@ class FDS_DB {
         
         $table_name = $this->required_tables['logs'];
         
+        // Properly serialize context data for storage
+        $serialized_context = '';
+        if (!empty($context)) {
+            // Use json_encode instead of maybe_serialize for better compatibility
+            $serialized_context = json_encode($context, JSON_PRETTY_PRINT);
+            
+            // If JSON encoding fails, try a simpler approach
+            if ($serialized_context === false) {
+                $simplified_context = array();
+                foreach ($context as $key => $value) {
+                    if (is_scalar($value) || is_null($value)) {
+                        $simplified_context[$key] = $value;
+                    } else {
+                        $simplified_context[$key] = '[complex data]';
+                    }
+                }
+                $serialized_context = json_encode($simplified_context);
+            }
+        }
+        
         return $wpdb->insert(
             $table_name,
             array(
                 'level' => $level,
                 'message' => $message,
-                'context' => !empty($context) ? maybe_serialize($context) : '',
+                'context' => $serialized_context,
                 'created_at' => current_time('mysql'),
             ),
             array('%s', '%s', '%s', '%s')

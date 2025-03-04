@@ -321,6 +321,28 @@ class FDS_REST_Controller {
         global $wpdb;
         $table_name = $wpdb->prefix . 'fds_logs';
         
+        // Check if the table exists
+        $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
+        
+        if (!$table_exists) {
+            // Try to create the table
+            $this->logger->error("Logs table does not exist, attempting to create it", [
+                'table_name' => $table_name
+            ]);
+            
+            $this->db->create_tables_if_needed();
+            
+            // Check again
+            $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
+            
+            if (!$table_exists) {
+                wp_send_json_error([
+                    'message' => __('Logs table does not exist and could not be created.', 'filebird-dropbox-sync')
+                ]);
+                return;
+            }
+        }
+        
         $levels = array('emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug');
         $level_index = array_search($level, $levels);
         
@@ -339,11 +361,33 @@ class FDS_REST_Controller {
         
         if (is_array($logs)) {
             foreach ($logs as $log) {
+                // Handle context data - ensure it's properly formatted JSON
+                $context = $log->context;
+                if (!empty($context)) {
+                    // If it's already JSON, just pass it through
+                    if (is_string($context) && $this->is_json($context)) {
+                        // Already JSON - no change needed
+                    } else if (is_string($context)) {
+                        // Try to unserialize if it's serialized PHP
+                        $unserialized = @unserialize($context);
+                        if ($unserialized !== false) {
+                            // Successfully unserialized, encode as JSON
+                            $context = json_encode($unserialized, JSON_PRETTY_PRINT);
+                        } else {
+                            // Not serialized PHP, encode as simple string
+                            $context = json_encode(['message' => $context], JSON_PRETTY_PRINT);
+                        }
+                    } else {
+                        // Not a string (shouldn't happen), encode as JSON
+                        $context = json_encode($context, JSON_PRETTY_PRINT);
+                    }
+                }
+                
                 $formatted_logs[] = array(
                     'id' => $log->id,
                     'level' => $log->level,
                     'message' => $log->message,
-                    'context' => $log->context,
+                    'context' => $context,
                     'created_at' => $log->created_at,
                 );
             }
@@ -352,12 +396,8 @@ class FDS_REST_Controller {
             $this->logger->error("Failed to retrieve logs", [
                 'level' => $level,
                 'page' => $page,
-                'per_page' => $per_page
-            ]);
-            
-            // Force add a log entry to the database
-            $this->db->add_log('error', 'Logs retrieval system test', [
-                'timestamp' => current_time('mysql')
+                'per_page' => $per_page,
+                'logs_result' => var_export($logs, true)
             ]);
         }
         
@@ -368,6 +408,21 @@ class FDS_REST_Controller {
             'per_page' => $per_page,
             'total_pages' => ceil($total / $per_page),
         ));
+    }
+
+    /**
+     * Helper method to check if a string is valid JSON
+     *
+     * @param string $string The string to check
+     * @return bool True if valid JSON, false otherwise
+     */
+    private function is_json($string) {
+        if (!is_string($string)) {
+            return false;
+        }
+        
+        json_decode($string);
+        return (json_last_error() == JSON_ERROR_NONE);
     }
 
     /**
