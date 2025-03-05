@@ -632,7 +632,7 @@ class FDS_REST_Controller {
     }
 
     /**
-     * Initiate manual sync via AJAX.
+     * Initiate manual sync via AJAX with immediate processing.
      *
      * @since    1.0.0
      */
@@ -644,16 +644,62 @@ class FDS_REST_Controller {
         
         check_ajax_referer('fds-admin-nonce', 'nonce');
         
+        // Check if sync is enabled
+        if (!get_option('fds_sync_enabled', false)) {
+            wp_send_json_error(['message' => __('Synchronization is not enabled. Please enable it in settings.', 'filebird-dropbox-sync')]);
+            return;
+        }
+        
+        // Check Dropbox connection
+        $settings = new FDS_Settings();
+        $dropbox_api = new FDS_Dropbox_API($settings);
+        
+        if (!$dropbox_api->has_valid_token()) {
+            wp_send_json_error(['message' => __('No valid Dropbox connection. Please reconnect to Dropbox.', 'filebird-dropbox-sync')]);
+            return;
+        }
+        
+        // Clear any existing queue lock to prevent deadlocks
+        delete_transient('fds_queue_lock');
+        delete_option('fds_queue_lock_time');
+        
         // Get queue instance
         $queue = $this->get_queue_instance();
         
         // Start full sync
-        $queue->start_full_sync();
+        $result = $queue->start_full_sync();
+        
+        if (!$result) {
+            wp_send_json_error(['message' => __('Failed to start synchronization. Please check logs.', 'filebird-dropbox-sync')]);
+            return;
+        }
+        
+        // Force immediate processing of the first batch
+        // This ensures the sync actually starts right away instead of waiting for WP-Cron
+        $processed = $queue->force_process_queue();
         
         // Log action
-        $this->logger->info("Manual sync initiated by administrator");
+        $this->logger->info("Manual sync initiated by administrator", [
+            'processed_tasks' => $processed
+        ]);
         
-        wp_send_json_success(['message' => __('Synchronization started. This process will continue in the background.', 'filebird-dropbox-sync')]);
+        // Make sure next runs are scheduled
+        if (class_exists('ActionScheduler') && function_exists('as_schedule_single_action')) {
+            if (!as_next_scheduled_action('fds_process_queue')) {
+                as_schedule_single_action(time() + 30, 'fds_process_queue');
+                $this->logger->info("Scheduled next queue processing via Action Scheduler");
+            }
+        } else {
+            if (!wp_next_scheduled('fds_process_queue')) {
+                wp_schedule_single_event(time() + 30, 'fds_process_queue');
+                $this->logger->info("Scheduled next queue processing via WP-Cron");
+            }
+        }
+        
+        wp_send_json_success([
+            'message' => __('Synchronization started. This process will continue in the background.', 'filebird-dropbox-sync'),
+            'processed' => $processed
+        ]);
     }
 
     /**

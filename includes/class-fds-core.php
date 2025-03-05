@@ -340,10 +340,7 @@ class FDS_Core {
         if (!class_exists('ActionScheduler')) {
             $this->logger->info("Action Scheduler not available, using WP-Cron for queue processing");
             
-            // Clear any existing scheduled events to avoid duplicates
-            wp_clear_scheduled_hook('fds_process_queue');
-            
-            // Schedule regular cron events
+            // Schedule regular cron events - DO NOT clear existing events first
             if (!wp_next_scheduled('fds_process_queue')) {
                 $scheduled = wp_schedule_event(time(), 'one_minute', 'fds_process_queue');
                 if ($scheduled === false) {
@@ -351,6 +348,8 @@ class FDS_Core {
                 } else {
                     $this->logger->info("Successfully scheduled fds_process_queue event with WP-Cron");
                 }
+            } else {
+                $this->logger->info("WP-Cron event for queue processing already scheduled");
             }
             
             return false;
@@ -366,6 +365,12 @@ class FDS_Core {
         
         // Register our hook for weekly maintenance
         add_action('fds_weekly_maintenance', array($this->performance, 'optimize_database_tables'));
+        
+        // Schedule Action Scheduler tasks if not already scheduled
+        if (function_exists('as_has_scheduled_action') && !as_has_scheduled_action('fds_process_queue')) {
+            as_schedule_recurring_action(time(), 60, 'fds_process_queue'); // Every minute
+            $this->logger->info("Scheduled recurring task with Action Scheduler");
+        }
         
         // Setup parallel processing if the method exists
         if (method_exists($this->performance, 'setup_parallel_processing')) {
@@ -391,9 +396,21 @@ class FDS_Core {
     }
 
     /**
-     * Check for post-activation tasks
+     * Check for post-activation tasks and ensure WP-Cron is scheduled
      */
     public function check_post_activation_tasks() {
+        // Check if sync processing is scheduled
+        if (!wp_next_scheduled('fds_process_queue')) {
+            // Schedule the event (every minute)
+            $result = wp_schedule_event(time(), 'one_minute', 'fds_process_queue');
+            
+            if ($result === false) {
+                $this->logger->error("Failed to schedule fds_process_queue event with WP-Cron");
+            } else {
+                $this->logger->info("Successfully scheduled fds_process_queue event with WP-Cron");
+            }
+        }
+        
         // Check if we need to run a full sync after activation
         if (get_option('fds_run_full_sync_after_activation', false)) {
             delete_option('fds_run_full_sync_after_activation');
@@ -402,6 +419,11 @@ class FDS_Core {
             if (isset($this->queue) && isset($this->logger)) {
                 $this->logger->info("Running full sync after activation");
                 $this->queue->start_full_sync();
+                
+                // Force immediate processing
+                if (method_exists($this->queue, 'force_process_queue')) {
+                    $this->queue->force_process_queue();
+                }
             }
         }
     }

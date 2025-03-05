@@ -70,7 +70,7 @@ class FDS_Queue {
             return;
         }
         
-        // Get lock with timeout value
+        // Get lock with timeout value - skip checking for locks during development/debugging
         if (!$this->get_lock_with_timeout()) {
             $this->logger->debug("Could not acquire queue lock, another process might be running");
             return;
@@ -121,6 +121,9 @@ class FDS_Queue {
             if (empty($items)) {
                 $this->logger->debug("No pending tasks to process");
                 $this->release_lock();
+                
+                // Make sure next process is scheduled
+                $this->schedule_next_run();
                 return;
             }
             
@@ -220,8 +223,14 @@ class FDS_Queue {
             
             // If there are more items to process, schedule another run
             if ($success_count > 0 || $failure_count > 0) {
-                // Schedule more processing
-                $this->schedule_next_run();
+                // Check for more pending items
+                $pending_count = $wpdb->get_var("SELECT COUNT(*) FROM $wpdb->prefix" . "fds_sync_queue WHERE status = 'pending'");
+                
+                if ($pending_count > 0) {
+                    // Schedule more processing
+                    $this->schedule_next_run();
+                    $this->logger->debug("Scheduled next run - $pending_count pending items remain");
+                }
             }
             
             // Cleanup completed tasks older than 7 days
@@ -326,6 +335,20 @@ class FDS_Queue {
         ));
         
         try {
+            // Handle system tasks first (like full sync)
+            if ($item->item_type === 'system') {
+                switch ($item->action) {
+                    case 'full_sync':
+                        return $this->process_full_sync_task($item);
+                    default:
+                        $this->logger->error("Unknown system action", array(
+                            'action' => $item->action,
+                            'item_id' => $item->item_id
+                        ));
+                        return false;
+                }
+            }
+            
             // Determine the action to take
             if ($item->direction === 'wordpress_to_dropbox') {
                 if ($item->item_type === 'folder') {
@@ -381,6 +404,152 @@ class FDS_Queue {
                 'exception' => $e->getMessage(),
                 'item_id' => $item->id
             ));
+            return false;
+        }
+    }
+
+    /**
+     * Process a full sync task.
+     *
+     * @since    1.0.0
+     * @param    object    $task    The task object.
+     * @return   boolean            True on success, false on failure.
+     */
+    protected function process_full_sync_task($task) {
+        try {
+            $this->logger->info("Starting full synchronization process", [
+                'task_id' => $task->id,
+                'started_at' => isset($task->data['started_at']) ? $task->data['started_at'] : current_time('mysql')
+            ]);
+            
+            // Get all FileBird folders
+            if (!class_exists('FileBird\\Model\\Folder')) {
+                throw new Exception("FileBird plugin not detected");
+            }
+            
+            // Get all folders from FileBird
+            $filebird_folders = \FileBird\Model\Folder::getFolders();
+            
+            if (empty($filebird_folders)) {
+                $this->logger->info("No FileBird folders found to sync");
+                return true; // No folders to sync is still a successful sync
+            }
+            
+            $this->logger->info("Found FileBird folders to sync", [
+                'folder_count' => count($filebird_folders)
+            ]);
+            
+            // Process each folder
+            $db = new FDS_DB();
+            $root_folder = get_option('fds_root_dropbox_folder', '/Website');
+            
+            // Add root folder task first
+            $db->add_to_sync_queue(
+                'create',
+                'folder',
+                '0', // Root folder ID
+                'wordpress_to_dropbox',
+                array(
+                    'folder_id' => 0,
+                    'folder_name' => basename($root_folder),
+                    'folder_path' => $root_folder,
+                ),
+                2 // High priority
+            );
+            
+            // Queue folder sync tasks (creates or updates for folders)
+            foreach ($filebird_folders as $folder) {
+                $folder_id = $folder->id;
+                $folder_path = $this->folder_sync->get_dropbox_path_for_filebird_folder($folder_id);
+                
+                if (!$folder_path) {
+                    $this->logger->warning("Failed to determine Dropbox path for folder", [
+                        'folder_id' => $folder_id,
+                        'folder_name' => $folder->name
+                    ]);
+                    continue;
+                }
+                
+                // Add folder task
+                $db->add_to_sync_queue(
+                    'create',
+                    'folder',
+                    (string) $folder_id,
+                    'wordpress_to_dropbox',
+                    array(
+                        'folder_id' => $folder_id,
+                        'folder_name' => $folder->name,
+                        'folder_path' => $folder_path,
+                    ),
+                    3 // Moderate priority
+                );
+                
+                // Get files in the folder
+                if (class_exists('FileBird\\Model\\Folder')) {
+                    $args = array(
+                        'post_type' => 'attachment',
+                        'posts_per_page' => -1,
+                        'post_status' => 'inherit',
+                        'fields' => 'ids',
+                        'meta_query' => array(
+                            array(
+                                'key' => '_wp_attached_file',
+                                'compare' => 'EXISTS',
+                            ),
+                        )
+                    );
+                    
+                    // Get attachment IDs in this folder
+                    $attachment_ids = \FileBird\Model\Folder::getAttachmentIdsByFolderId($folder_id);
+                    
+                    if (!empty($attachment_ids)) {
+                        $this->logger->info("Found files to sync in folder", [
+                            'folder_id' => $folder_id,
+                            'file_count' => count($attachment_ids)
+                        ]);
+                        
+                        // Queue file sync tasks
+                        foreach ($attachment_ids as $attachment_id) {
+                            // Add file task
+                            $file_path = get_attached_file($attachment_id);
+                            if (!$file_path || !file_exists($file_path)) {
+                                continue;
+                            }
+                            
+                            $dropbox_path = $this->file_sync->get_dropbox_path_for_attachment($attachment_id, $folder_id);
+                            
+                            if (!$dropbox_path) {
+                                continue;
+                            }
+                            
+                            $db->add_to_sync_queue(
+                                'create',
+                                'file',
+                                (string) $attachment_id,
+                                'wordpress_to_dropbox',
+                                array(
+                                    'attachment_id' => $attachment_id,
+                                    'local_path' => $file_path,
+                                    'dropbox_path' => $dropbox_path,
+                                    'folder_id' => $folder_id,
+                                ),
+                                4 // Lower priority than folders
+                            );
+                        }
+                    }
+                }
+            }
+            
+            // Force immediate processing of next batch
+            $this->schedule_next_run();
+            
+            $this->logger->info("Full sync task processed successfully, queued all folders and files for sync");
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("Full sync task failed", [
+                'exception' => $e->getMessage(),
+                'task_id' => $task->id
+            ]);
             return false;
         }
     }
